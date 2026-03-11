@@ -1,0 +1,609 @@
+You are an elite senior systems architect, security engineer, backend engineer, DevOps engineer, protocol engineer, and product designer. Your task is to design and build a production-ready, self-hostable, decentralized Fediverse server called CLIverse.
+
+CLIverse is a custom ActivityPub-powered Fediverse instance with no web UI at all. The entire user experience must happen through SSH and an interactive CLI shell-like environment. Users connect to the instance like this:
+
+ssh username@post.rbxl.eu -p 6969
+
+Administrators connect like this:
+
+ssh admin@post.rbxl.eu -p 6969
+
+The project must run on Linux servers, be fully deployable with Docker Compose, work cleanly behind Caddy, and be built for real-world hosting, federation, scaling, and security. The platform must be truly decentralized and really use ActivityPub, not a fake local-only Twitter clone.
+
+The system must be designed as a serious, secure, polished, production-grade project. It must feel like a real SSH-native social network client/server environment.
+
+Core concept
+
+Build a Fediverse server where:
+	•	there is no browser interface
+	•	users interact only over SSH
+	•	the SSH session launches them into a custom interactive CLI app
+	•	every social action is done via commands
+	•	federation is handled via ActivityPub
+	•	admins manage the instance either through a dedicated secure admin SSH flow or dedicated admin commands
+	•	the platform supports user accounts, posts, follows, replies, boosts, profiles, remote actors, federation controls, moderation, logs, and administration
+
+This must not behave like a normal Linux shell. After SSH authentication, users should enter a restricted, purpose-built CLIverse shell with a professional TUI/CLI-like experience.
+
+Branding and naming
+
+Project name: CLIverse
+
+Instance example:
+	•	domain: post.rbxl.eu
+	•	SSH port: 6969
+
+User identity style in the CLI should visually resemble:
+instance name | @username.rbxl.eu -:
+
+This identity style should appear in the prompt/header/UI where appropriate.
+
+Extremely important architecture rules
+	1.	No web interface at all
+	•	no public frontend
+	•	no React/Vue/Svelte dashboard
+	•	no HTML-based user panel
+	•	optional healthcheck/status endpoint may exist internally if absolutely needed for orchestration, but the product itself must not expose a normal website UI
+	•	if a minimal internal API exists, it must be private and not treated as the product interface
+	2.	Real ActivityPub
+	•	implement proper ActivityPub concepts
+	•	support actors, inbox/outbox behavior, object addressing, remote fetching, delivery, signatures where appropriate, and federation with real Fediverse instances
+	•	design compatibility with software such as Mastodon, Akkoma, Pleroma, Misskey, GoToSocial, and similar servers where practical
+	•	posts must be federated, remote users must be followable, and instance federation controls must affect actual federation logic
+	3.	SSH-first UX
+	•	the platform is essentially an SSH-native social network
+	•	SSH is the main application transport for humans
+	•	once authenticated, users land in a custom CLI environment
+	•	users should not get a general-purpose shell
+	•	use restricted execution, forced command entrypoints, jailed environment concepts, and hardening to avoid shell breakout
+	4.	Security is critical
+	•	everything must be designed to be “super secure”
+	•	SSH authentication, account lifecycle, rate limits, brute-force protections, secure password handling, audit logging, sandboxing, role separation, secrets management, container security, admin isolation, federation abuse controls, and denial-of-service mitigations must all be covered
+
+User SSH experience
+
+When a normal user SSHs into the instance:
+ssh username@post.rbxl.eu -p 6969
+
+they must authenticate and then enter the CLIverse environment.
+
+The interface should feel polished and purpose-built:
+	•	welcome banner
+	•	account handle display
+	•	instance name
+	•	command prompt
+	•	help system
+	•	tab completion if possible
+	•	command history if appropriate and secure
+	•	friendly structured output
+	•	errors that are clear and human-readable
+	•	optional TUI-like sections for inbox, timeline, profile, notifications, drafts, settings, etc.
+
+Do not give them raw bash access unless explicitly architected inside a heavily restricted subsystem, which is not preferred.
+
+Required account creation flow
+
+The system must support a secure account onboarding process with this exact concept:
+	•	during account creation, the user must provide an administrator with their own SSH public key
+	•	the admin creates the account for them
+	•	the system or admin assigns a randomly generated initial password
+	•	the user logs in using their SSH flow and then must change the initial password with a command:
+settings update_password
+	•	this command must ask for:
+	•	old password
+	•	new password
+	•	new password again for confirmation
+	•	the initial password must be treated as temporary and rotation should be enforced or strongly encouraged
+	•	SSH key registration and password-based confirmation logic must be designed carefully and securely
+
+Clarify and design whether normal users authenticate with:
+	•	SSH key only
+	•	SSH key + app password
+	•	password only for first login then key binding
+	•	keyboard-interactive challenge inside the CLIverse shell
+	•	or a layered hybrid method
+
+Choose the architecture that is most secure and practical, but preserve the required user onboarding concept.
+
+Required admin access flow
+
+There must be an administrator management path using SSH.
+
+Administrators can access the admin environment via:
+ssh admin@post.rbxl.eu -p 6969
+
+Requirements:
+	•	admin access should use a shared administrator account model only if that is the chosen requested mode
+	•	it must require a shared admin-only SSH key setup
+	•	after key validation, the system must also require a really secure, unchangeable password
+	•	the purpose of the extra password challenge is to confirm the private/public SSH material was not shared outside the admin group
+	•	this admin environment must be isolated from normal user mode
+	•	admin access must include elevated commands for moderation, federation management, user creation, logs, health, tasks, and safety controls
+
+You should also evaluate whether a shared admin account is wise from a security and auditing perspective. If it is insecure, then preserve the requested behavior while improving it with:
+	•	per-admin named identities
+	•	shared admin group role
+	•	mandatory second factor
+	•	sudo-like re-auth
+	•	session audit trails
+	•	per-admin signed actions
+	•	tamper-evident logs
+
+Design the best production-safe version while keeping the requested SSH admin concept intact.
+
+Required posting command examples
+
+The CLI must support intuitive commands. For example:
+	•	post global "message goes here"
+	•	fed add "another fediverse instance link here"
+	•	fed remove "another fediverse instance link here"
+
+You must expand this into a full, coherent command system with excellent ergonomics.
+
+Required feature set
+
+Build a large, serious feature set. At minimum include:
+
+User features
+	•	create local posts
+	•	global/public posts
+	•	unlisted/followers-only/direct visibility if supported by the chosen ActivityPub mapping
+	•	view timelines:
+	•	home
+	•	local
+	•	federated/global
+	•	mentions
+	•	notifications
+	•	bookmarks
+	•	follow/unfollow local and remote accounts
+	•	remote account lookup
+	•	reply to posts
+	•	boost/repost/share
+	•	favorite/like
+	•	bookmark/save
+	•	delete own posts
+	•	edit posts if supported, or document why edits are not federated well and how to handle them
+	•	drafts
+	•	profile viewing
+	•	profile editing
+	•	bio/about
+	•	display name
+	•	avatar URL
+	•	banner URL
+	•	custom profile metadata fields if possible
+	•	account settings
+	•	password change
+	•	SSH key management
+	•	session listing
+	•	account export
+	•	mute/block/report
+	•	notifications preferences
+	•	remote object inspection
+	•	search for local/remote actors and posts where feasible
+	•	thread viewing
+	•	pagination and filtering
+	•	media attachment support via URLs if direct upload over SSH is not initially implemented
+	•	optional upload pipeline over SSH/SFTP if well-designed
+	•	polls if practical
+	•	pinned posts if practical
+
+Federation features
+	•	ActivityPub actor support
+	•	inbox/outbox processing
+	•	remote actor discovery
+	•	follow request handling
+	•	delivery queue
+	•	retry queue
+	•	federation allow/deny controls
+	•	per-instance federation policy
+	•	defederation tools
+	•	refederation tools
+	•	instance metadata
+	•	remote media handling policy
+	•	signature verification strategy
+	•	rate control for inbound/outbound federation traffic
+	•	dead-letter handling for failed federation deliveries
+	•	support for interacting with remote Mastodon-like instances as much as possible
+
+Moderation and safety features
+	•	user suspension
+	•	user silencing/limiting
+	•	domain blocks
+	•	domain allows
+	•	remote account blocks
+	•	report queue
+	•	content takedown workflow
+	•	post removal
+	•	quarantine mode
+	•	spam heuristics
+	•	abuse controls
+	•	flood/rate limit controls
+	•	login protection
+	•	suspicious session detection
+	•	audit logs
+	•	moderation notes
+	•	role-based permissions
+
+Admin features
+	•	create local users
+	•	rotate/reset passwords
+	•	add/remove SSH keys for users
+	•	inspect federation health
+	•	inspect queues
+	•	manage jobs
+	•	see resource usage
+	•	manage policies
+	•	backup and restore tooling
+	•	maintenance mode
+	•	emergency defederation
+	•	legal/contact info config
+	•	instance banner/motd
+	•	admin notices/broadcasts
+	•	config validation
+	•	database migrations
+	•	instance bootstrap wizard or bootstrap commands
+	•	admin account auto-generation or manual creation through container exec if auto-creation is unavailable
+
+Command design requirements
+
+Design a very complete and polished command tree. Examples of categories you should implement:
+	•	help
+	•	post
+	•	timeline
+	•	notif
+	•	profile
+	•	account
+	•	settings
+	•	follow
+	•	user
+	•	search
+	•	thread
+	•	bookmark
+	•	fav
+	•	boost
+	•	draft
+	•	fed
+	•	mod
+	•	admin
+	•	system
+
+Example commands to include and expand:
+	•	post global "hello fediverse"
+	•	post local "hello local timeline"
+	•	post reply <post_id> "reply text"
+	•	timeline home
+	•	timeline global
+	•	timeline local
+	•	notif list
+	•	profile show
+	•	profile set avatar_url "https://..."
+	•	profile set banner_url "https://..."
+	•	settings update_password
+	•	settings add_key
+	•	settings remove_key
+	•	follow add @user@remote.instance
+	•	follow remove @user@remote.instance
+	•	user show @user@instance
+	•	search users "query"
+	•	search posts "query"
+	•	thread view <post_id>
+	•	fed add "example.org"
+	•	fed remove "bad.instance"
+	•	fed list
+	•	mod suspend <user>
+	•	admin create_user <username>
+
+Create a command system that is:
+	•	intuitive
+	•	scriptable where possible
+	•	human-friendly
+	•	secure against injection and parsing abuse
+	•	consistent in naming
+	•	easy to extend
+
+Also define:
+	•	output formatting
+	•	status codes
+	•	help text style
+	•	command aliases
+	•	pagination
+	•	confirmation prompts for destructive actions
+	•	machine-readable output mode such as JSON for automation if feasible
+
+Security requirements
+
+This part matters heavily. You must architect CLIverse with strong security practices:
+
+SSH security
+	•	port 6969 as requested
+	•	hardened SSH configuration
+	•	fail2ban or equivalent protections
+	•	rate limiting
+	•	key-based auth considerations
+	•	optional multi-factor or step-up auth for admins
+	•	strict ciphers/KEX/MAC policy where possible
+	•	forced command / restricted shell
+	•	no arbitrary shell access
+	•	sandboxed CLI runtime
+	•	per-user isolation
+	•	protection against escape from the CLI app
+	•	session timeout and idle timeout
+	•	audit logging of logins and critical actions
+	•	detection of abnormal login patterns
+
+Password security
+	•	initial random password generation
+	•	secure hashing using a modern algorithm such as Argon2id or equivalent
+	•	password reset/rotation controls
+	•	admin-enforced change-on-first-use if applicable
+	•	password retry lockouts
+	•	anti-bruteforce handling
+
+App security
+	•	input validation on all commands
+	•	remote content sanitization
+	•	SSRF protections for URL-based avatars/banners/media
+	•	command injection resistance
+	•	SQL injection resistance
+	•	safe parser design
+	•	strong authorization boundaries
+	•	role-based access control
+	•	signed or otherwise integrity-protected admin actions where appropriate
+	•	immutable or tamper-evident audit logs if feasible
+	•	secure secrets handling
+	•	defense-in-depth in containers
+	•	minimal container privileges
+	•	non-root containers where possible
+	•	read-only filesystem where possible
+	•	seccomp/apparmor/cap-drop hardening
+	•	network segmentation between services
+
+Federation security
+	•	signature verification strategy
+	•	replay protections where relevant
+	•	instance blocklists
+	•	inbound rate controls
+	•	queue isolation
+	•	malformed payload rejection
+	•	spam/flood defenses
+	•	safe fetch behavior for remote objects
+	•	job retries with backoff
+	•	abuse reporting pipeline
+
+Admin security
+	•	shared admin account concerns must be addressed
+	•	require both SSH key and fixed secure password as requested
+	•	preserve auditability
+	•	restrict admin commands
+	•	require reconfirmation for dangerous commands
+	•	allow emergency lockdown mode
+
+Technical stack guidance
+
+You may choose the best stack, but it must be production-suitable. Pick technologies that fit this use case. Good examples:
+	•	backend: Go or Rust preferred for security/performance/reliability, though other robust choices may be justified
+	•	CLI/TUI framework for the SSH session app
+	•	PostgreSQL for main database
+	•	Redis, NATS, or similar for queue/caching if needed
+	•	object storage or filesystem abstraction for media if attachments are supported
+	•	Docker Compose deployment
+	•	Caddy reverse proxy support where relevant
+	•	structured logging
+	•	background worker services
+	•	migrations
+	•	health checks
+	•	observability
+
+Explain your tech choices in the generated project.
+
+Docker Compose and deployment requirements
+
+The project must be built for Linux servers with Docker Compose support.
+
+Deployment requirements:
+	•	one-command or near one-command deployment
+	•	production-grade docker-compose.yml
+	•	clear .env.example
+	•	persistent volumes
+	•	migrations
+	•	healthchecks
+	•	restart policies
+	•	secure defaults
+	•	separate services as needed, such as:
+	•	app
+	•	worker
+	•	database
+	•	cache/queue
+	•	caddy
+	•	proper networking
+	•	secrets/config handling
+	•	log strategy
+	•	backup strategy
+
+Very important:
+	•	when Docker Compose builds or boots the stack, it should automatically create an administrator account with a random password if possible
+	•	if safe automatic creation is not feasible, provide a documented manual fallback using docker exec
+	•	the prompt must explicitly instruct the AI to implement both:
+	•	auto-bootstrap admin if possible
+	•	manual bootstrap command if needed
+
+The generated output should include example commands for retrieving the generated admin password securely.
+
+Caddy support requirements
+
+The project must support Caddy cleanly:
+	•	reverse proxying if any internal HTTP ActivityPub endpoints are needed
+	•	TLS automation
+	•	domain-based routing
+	•	secure headers where relevant
+	•	support for ActivityPub routes if the implementation exposes them
+	•	support for SSH traffic architecture discussion, noting that Caddy does not terminate SSH itself in the same way as HTTP reverse proxying, so the design must clearly separate SSH and HTTP concerns
+	•	explain how the domain serves both federation-related HTTP needs and SSH access on port 6969
+
+Important: since ActivityPub generally relies on HTTP(S), the architecture must correctly reconcile:
+	•	human interaction over SSH
+	•	federation over HTTPS
+without turning the product into a web UI product
+
+This distinction must be handled properly.
+
+ActivityPub design requirements
+
+You must deeply model the ActivityPub side. Include:
+	•	actor model
+	•	local actor representation
+	•	remote actor caching/discovery
+	•	post object model
+	•	addressing
+	•	followers/following collections
+	•	inbox/outbox behavior
+	•	delivery pipeline
+	•	signature/auth scheme
+	•	retries
+	•	object fetch
+	•	dereferencing policy
+	•	mapping CLI commands to ActivityPub actions
+	•	deletion semantics
+	•	moderation semantics
+	•	compatibility expectations with common Fediverse software
+
+The project must be real enough that a user posting from the SSH CLI can federate to other Fediverse instances.
+
+Data model requirements
+
+Define the main data structures/entities, such as:
+	•	users
+	•	credentials
+	•	ssh keys
+	•	roles
+	•	sessions
+	•	posts
+	•	post revisions
+	•	follows
+	•	likes
+	•	boosts
+	•	bookmarks
+	•	notifications
+	•	reports
+	•	moderation actions
+	•	instance/domain policies
+	•	remote actors
+	•	remote objects
+	•	federation deliveries
+	•	inbox events
+	•	audit logs
+	•	admin secrets/bootstrap records
+
+UX and interface polish requirements
+
+Even though this is CLI-only, it must look and feel premium:
+	•	branded welcome text
+	•	elegant prompt style
+	•	readable output
+	•	clear separators
+	•	helpful errors
+	•	first-login onboarding
+	•	contextual help
+	•	discoverable commands
+	•	maybe a dashboard-like summary after login
+	•	MOTD or instance notice
+	•	optional ANSI styling if supported
+	•	fallback plain mode
+	•	accessibility considerations for terminal environments
+
+The CLI should feel like a proper app, not a hacky shell script.
+
+Production-readiness requirements
+
+The generated project must be explicitly designed as:
+	•	production ready
+	•	secure by default
+	•	maintainable
+	•	documented
+	•	testable
+	•	observable
+	•	backupable
+	•	upgradeable
+	•	containerized
+	•	suitable for real deployment
+
+The AI must output:
+	•	full architecture
+	•	full repo structure
+	•	implementation plan
+	•	security plan
+	•	protocol plan
+	•	command reference
+	•	database schema outline
+	•	Docker Compose setup
+	•	Caddy config
+	•	bootstrap flow
+	•	admin model
+	•	onboarding flow
+	•	threat model
+	•	testing strategy
+	•	CI/CD suggestions
+	•	backup/restore design
+	•	scaling notes
+	•	roadmap of future features
+
+Deliverables required from the AI
+
+Generate the project as if preparing for serious development. The output should include:
+	1.	A high-level overview of CLIverse
+	2.	Core architecture and service breakdown
+	3.	Recommended tech stack with justification
+	4.	Full repository/folder structure
+	5.	Complete command system design
+	6.	Authentication and account lifecycle design
+	7.	Admin model and admin SSH flow
+	8.	User onboarding flow with SSH public key submission logic
+	9.	Password change flow using settings update_password
+	10.	ActivityPub federation architecture
+	11.	Database schema/entities
+	12.	API/internal service design if needed
+	13.	Security hardening plan
+	14.	Docker Compose stack
+	15.	Caddy integration design
+	16.	Automatic admin bootstrap design
+	17.	Manual docker exec admin creation fallback
+	18.	Moderation tools
+	19.	Logging and observability
+	20.	Backup and restore strategy
+	21.	Testing strategy
+	22.	Threat model and mitigation list
+	23.	Example CLI session transcripts
+	24.	Sample config files and .env.example
+	25.	Production deployment instructions
+	26.	Future roadmap
+
+Important implementation philosophy
+
+Do not make this minimal. Do not make it a toy. Do not make it a proof of concept unless clearly labeled as a phased roadmap. Design it like a serious SSH-native Fediverse server that could actually be built and used.
+
+Be opinionated where needed. Improve unsafe parts of the requested concept without betraying the concept. Keep the requested style and behavior, but engineer it properly.
+
+Extra implementation notes
+	•	the SSH layer must feel like an application transport, not a normal shell login
+	•	users should ideally be isolated from the host OS entirely
+	•	consider using an SSH server library embedded in the app or a carefully restricted OpenSSH forced-command architecture
+	•	design for both local and remote account interaction
+	•	include safe parsing for quoted message commands like:
+post global "message goes here"
+	•	include robust error handling and help responses
+	•	include anti-spam and anti-abuse design from the start
+	•	include graceful federation degradation if remote instances misbehave
+	•	include migration/versioning strategy
+	•	include administrator notices and system health views
+	•	include a first-run bootstrap that prints or stores the generated admin password securely
+
+Example tone for the final project
+
+CLIverse should feel like:
+	•	a command-line social platform
+	•	a terminal-native Fediverse node
+	•	a secure SSH app
+	•	a real decentralized service
+	•	a polished hacker-friendly but production-safe system
+
+Now generate the full design and implementation output for CLIverse in exhaustive detail.

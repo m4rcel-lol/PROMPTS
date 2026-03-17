@@ -1,0 +1,444 @@
+Create a fully custom operating system project from scratch that is inspired by the very early spirit of Linux as “mostly a kernel first” system, but is NOT a Linux distribution. It must be its own standalone operating system project with its own identity, source tree, boot flow, userspace, init system, desktop environment, utilities, build tooling, branding, and documentation. It may be based on the general Linux kernel architecture and use a heavily modified custom Linux kernel codebase as the hardware abstraction and core system base, but the final result must feel like its own original operating system rather than “Linux + packages”. Do not make it a distro, do not base it on Ubuntu, Debian, Arch, Fedora, Alpine, or any existing distro layout. Build a unique OS.
+
+Project language stack:
+- C for low-level kernel components, core runtime, drivers, and system libraries
+- Rust for safer modern subsystems, selected services, IPC helpers, package tooling, desktop shell logic, and selected userspace components
+- x86 Assembly for boot path, early startup, context switching stubs, interrupt/exception entry code, and other critical low-level routines
+
+Primary design goals:
+1. A real custom operating system identity
+2. Early-Linux-like simplicity in spirit, especially in kernel structure and philosophy
+3. A custom desktop environment inspired visually and behaviorally by Windows 1.0 and Windows 3.0
+4. Small, understandable, hackable codebase
+5. Bootable on modern x86_64 PCs and in VMs like QEMU, VirtualBox, and VMware
+6. Clean architecture and educational value
+7. Strong separation between kernel, core services, and GUI stack
+8. Buildable by a single developer or small team
+9. No dependency on GNU/Linux userspace
+10. Should feel like an alternate-history retro desktop OS with modern code discipline
+
+High-level concept:
+Design an operating system that uses a custom-maintained Linux-derived kernel core as its base, but everything around it must be custom: boot experience, init, service manager, shell, libraries where practical, system utilities, configuration format, window manager, desktop environment, file manager, control panel, installer image, package format, branding, and developer tooling. Think “what if early Linux grew into a unique retro-GUI operating system instead of powering modern distributions”.
+
+Target platform:
+- x86_64 first-class support
+- Optional i686 compatibility layer or secondary target if feasible
+- BIOS and UEFI boot support if possible, otherwise choose one primary path first and clearly document roadmap for the other
+- VM-first development target, with real hardware support as a second stage
+- PS/2 and USB keyboard/mouse support
+- VGA/framebuffer first, with optional VESA/simple graphics layer
+- SATA/AHCI and basic virtual disk drivers
+- EXT2-like or custom simple filesystem support for early versions
+
+Required project structure:
+Generate a full repo-style project blueprint with realistic folders and files, such as:
+
+/boot
+/kernel
+/kernel/arch/x86_64
+/kernel/mm
+/kernel/sched
+/kernel/fs
+/kernel/drivers
+/kernel/syscall
+/kernel/include
+/userspace
+/userspace/init
+/userspace/coreutils
+/userspace/shell
+/userspace/login
+/userspace/session
+/userspace/services
+/lib
+/lib/libcore
+/lib/libgui
+/lib/libipc
+/lib/libruntime
+/desktop
+/desktop/wm
+/desktop/panel
+/desktop/fileman
+/desktop/control
+/desktop/sessionmgr
+/desktop/themes
+/tools
+/scripts
+/build
+/docs
+/assets
+/tests
+
+Also include:
+- README.md
+- ROADMAP.md
+- ARCHITECTURE.md
+- BUILDING.md
+- BOOTFLOW.md
+- GUI_DESIGN.md
+- CONTRIBUTING.md
+- LICENSE
+- .editorconfig
+- Makefile or meson/ninja/cmake-based build files
+- linker scripts
+- cross-compiler notes
+- QEMU run scripts
+- disk image generation scripts
+
+Kernel requirements:
+The kernel must be described as a custom Linux-kernel-based core that is heavily modified and stripped down for this OS. Keep the design simple and educational. Include:
+- boot and early init
+- memory management
+- scheduler
+- interrupt handling
+- syscall interface
+- timer support
+- process and thread model
+- VFS layer
+- minimal driver model
+- TTY/console subsystem
+- framebuffer or graphics bridge for GUI
+- IPC primitives
+- module support optional, monolithic kernel acceptable
+- clear explanation of what parts are kernel-space and what parts are user-space
+
+Kernel philosophy:
+- Keep it small and understandable
+- Prefer clarity over enterprise complexity
+- Avoid unnecessary modern Linux ecosystem baggage
+- Focus on direct control and low dependency count
+- Preserve a “first principles OS hacker” feel
+
+Boot flow:
+Describe the full boot process in detail:
+1. Firmware stage
+2. Bootloader stage
+3. Kernel decompression/loading
+4. Early assembly startup
+5. Memory map initialization
+6. Interrupt descriptor and GDT setup
+7. Kernel main
+8. Device discovery
+9. Mount root filesystem
+10. Launch custom init
+11. Start core services
+12. Start graphical session
+13. Load retro desktop environment
+
+You may use GRUB or a minimal custom bootloader for practicality, but present both:
+- Phase 1: practical GRUB-based boot flow for faster development
+- Future phase: optional custom bootloader written in C and Assembly
+
+System architecture:
+Define the OS as having these layers:
+- Boot layer
+- Kernel layer
+- Core runtime and libc-like support
+- System service layer
+- User session layer
+- Window manager and desktop shell
+- Applications/utilities layer
+
+Create a clear component map with responsibilities for each layer.
+
+Userspace requirements:
+This OS must have its own custom userspace rather than using standard distro packages. Include:
+- custom init system
+- custom shell
+- login manager or session launcher
+- service supervisor
+- file utilities
+- text editor
+- config parser
+- system info tool
+- package/archive tool
+- settings tools
+- optional scripting support
+
+Init/service manager:
+Design a simple custom init system inspired by classic Unix simplicity. It should:
+- read simple service definitions
+- start services in order
+- supervise and restart optional services
+- support console mode and desktop mode
+- have readable logs
+- avoid systemd-like complexity
+- use a minimal declarative config format
+
+Shell:
+Create a custom shell that feels lightweight and retro. It should:
+- support basic commands
+- pipelines and redirection if feasible
+- clear syntax
+- small codebase
+- built-in help
+- integration with OS config and desktop session control
+
+Filesystem and storage:
+Choose a practical path:
+- initial support for ext2/ext-like filesystem or a custom simple filesystem
+- support mounting root and home
+- clean abstraction for later removable media support
+- disk image tooling for development
+- explain how files, configs, apps, and themes are stored
+
+Desktop environment:
+This is very important.
+
+Create a fully custom desktop environment inspired by Windows 1.0 and Windows 3.0, but not a direct clone. It should feel like a retro graphical shell from the late 80s / early 90s. Use that era as strong inspiration for:
+- tiled or constrained overlapping windows
+- monochrome or limited-color aesthetic option
+- beveled buttons
+- thick borders
+- classic menu bar
+- old-school file manager
+- simple program manager
+- control panel
+- clock, task list, and system status widgets
+- bitmap icons
+- dialog-driven settings
+- keyboard-friendly navigation
+- highly recognizable retro look
+
+Desktop UI components:
+- window manager
+- desktop shell
+- task switcher
+- program launcher / program manager
+- file manager
+- settings / control panel
+- terminal emulator
+- notification/message box system
+- theme engine
+- wallpaper and color scheme manager
+- font renderer for pixel/bitmap fonts
+- simple drawing API
+
+Visual direction:
+The desktop must resemble the spirit of Windows 1.0 / 3.0:
+- flat gray backgrounds or selectable retro palettes
+- teal, white, gray, and black UI options
+- chunky borders
+- classic title bars
+- iconic checkered or simple patterned wallpapers
+- pixel fonts or system bitmap fonts
+- square menus and simple icons
+- optional “386 enhanced mode” inspired branding or theme mode
+- window snapping/tile behavior preferred over modern compositing
+
+Important:
+Do NOT make it modern glassmorphism, GNOME-like, KDE-like, or mobile-inspired.
+Do NOT make it just “retro skin on Linux”.
+The GUI stack must be treated as a native, core part of the OS.
+
+GUI architecture:
+Define a custom graphics stack with:
+- framebuffer-based compositor or direct window drawing manager
+- 2D software rendering first
+- no hardware acceleration required in v1
+- simple event loop
+- input handling
+- window invalidation/redraw system
+- primitive widget toolkit
+- icon and font rendering pipeline
+- desktop session manager
+
+Applications for v1:
+Include at least these built-in apps:
+- File Manager
+- Terminal
+- Text Editor / Notepad equivalent
+- Control Panel
+- Clock / Calendar
+- About System
+- Task List
+- Program Manager
+- Paint-like minimal bitmap editor optional but desirable
+
+Development strategy:
+Structure the project in phases.
+
+Phase 0:
+- repo scaffolding
+- build system
+- cross-compiler setup
+- QEMU target
+- bootable image skeleton
+
+Phase 1:
+- boot path
+- minimal kernel init
+- serial console logging
+- memory manager foundation
+- timer/interrupt basics
+
+Phase 2:
+- scheduler
+- process/task model
+- syscall layer
+- init process
+- TTY shell
+
+Phase 3:
+- filesystem
+- storage drivers
+- config system
+- userspace utilities
+
+Phase 4:
+- framebuffer graphics
+- primitive window manager
+- desktop session startup
+- first GUI apps
+
+Phase 5:
+- retro desktop polish
+- file manager
+- control panel
+- theme system
+- installer/live image
+
+Phase 6:
+- networking
+- package system
+- developer SDK
+- long-term maintainability improvements
+
+Tooling requirements:
+- cross-compilation friendly
+- reproducible builds
+- disk image generation
+- QEMU debug scripts
+- GDB support
+- serial log output
+- CI-friendly build commands
+- documentation for dependencies
+- clear scripts like:
+  - build.sh
+  - run-qemu.sh
+  - make-image.sh
+  - clean.sh
+  - debug.sh
+
+Networking:
+For later phases include roadmap for:
+- loopback
+- basic TCP/IP
+- simple DHCP client
+- optional retro browser or downloader
+- remote shell/service management
+But networking does not need to be first priority for v1.
+
+Security model:
+Keep it simple but sensible:
+- user/kernel separation
+- permissions model
+- basic user accounts
+- password hashing in userspace auth tools
+- controlled service privileges
+- secure-by-default mindset
+- no fake enterprise security features
+- document threat model honestly
+
+Branding:
+Invent a strong original name for the OS and keep it consistent across:
+- boot screen
+- login/session manager
+- desktop shell
+- docs
+- utilities
+The name should sound like an alternate-history retro operating system. Also create names for:
+- kernel
+- desktop environment
+- init system
+- package/archive format
+- shell
+- file manager
+- control panel
+
+Examples of naming style:
+- short, memorable, slightly technical
+- 80s/90s computing vibe
+- not derivative of Linux distro branding
+
+Documentation requirements:
+Produce detailed design docs:
+- what makes it not a distro
+- what parts are Linux-kernel-derived and what parts are original
+- why the GUI is native to the OS design
+- memory/process model
+- input/graphics architecture
+- component interaction diagrams
+- milestone roadmap
+- limitations of v1
+- future expansion ideas
+
+Code generation expectations:
+When generating code, generate realistic starter code and not fake placeholder-only code. Include:
+- boot entry stubs in Assembly
+- low-level C kernel init
+- Rust service or desktop helper examples
+- syscall header interfaces
+- framebuffer demo
+- minimal window manager prototype
+- init/service definition parser
+- Makefiles or build scripts
+- linker scripts
+- QEMU config examples
+- example configs
+- theme assets description
+
+Build system:
+Choose one main build system and justify it. Good options:
+- Make + custom scripts for maximum transparency
+- Meson/Ninja for mixed-language practicality
+- CMake only if kept clean and understandable
+Prefer something transparent and hacker-friendly.
+
+Interoperability rules:
+- Do not rely on glibc-heavy Linux distro userspace
+- Do not assume GNU userland
+- do not pull in a normal desktop stack like X11, Wayland, GNOME, KDE, XFCE, or LXDE
+- do not treat the project as a skin/theme on top of an existing Linux distro
+- do not depend on systemd
+- do not present BusyBox as the main identity
+- everything core should feel native to this OS
+
+Inspirations:
+Use inspiration from:
+- very early Linux kernel philosophy
+- Minix educational clarity
+- classic Unix structure
+- Windows 1.0 and 3.0 visual design
+- old PC graphical shells
+- retro development environments
+But the final design must still be original.
+
+Deliverables I want from you:
+1. A full project concept and architecture
+2. A complete repo/file tree
+3. A phased development roadmap
+4. Core subsystem descriptions
+5. Naming/branding ideas
+6. UI/UX design spec for the retro desktop
+7. Example starter code in Rust, C, and Assembly
+8. Build and run instructions for QEMU
+9. Explanation of how to keep it “not a distro”
+10. Suggestions for future expansion without breaking the original vision
+
+Output format:
+- Start with project title and one-sentence pitch
+- Then give branding and subsystem names
+- Then architecture overview
+- Then repo tree
+- Then development phases
+- Then kernel details
+- Then userspace details
+- Then desktop environment spec
+- Then build toolchain
+- Then starter code examples
+- Then roadmap
+- Then risks/challenges
+- Then future ideas
+
+Tone:
+Write like a serious systems architect and OS engineer creating a real indie operating system project, not like a vague marketing writer. Be concrete, technical, and ambitious. Prioritize realism, maintainability, and strong design identity.

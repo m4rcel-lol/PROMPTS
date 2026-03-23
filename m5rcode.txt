@@ -1,0 +1,1839 @@
+# ████████████████████████████████████████████████████████████████
+
+# M5RCODE LANGUAGE — FULL PRODUCTION-GRADE IMPLEMENTATION PROMPT
+
+# Version: 2.0 — “NO TOY” EDITION
+
+# ████████████████████████████████████████████████████████████████
+
+> **DIRECTIVE TO AI**: You are building a PRODUCTION-GRADE, FULLY NATIVE programming language called **m5rcode**. This is NOT a bytecode-interpreted toy. This is NOT a transpiler. This is a compiled language that emits real native machine code via an **LLVM backend**. It must be capable of producing standalone executables, shared libraries, and static libraries on Windows (x86_64), Linux (x86_64, ARM64), and macOS (x86_64, ARM64). Every section of this prompt is a hard engineering requirement. Nothing is optional. Nothing is a placeholder. Implement it fully or do not implement it at all.
+
+-----
+
+## PART 0 — NON-NEGOTIABLE ENGINEERING LAWS
+
+These laws govern every decision made during implementation:
+
+1. **Real native code only.** The compiler emits LLVM IR. `llc` + `lld` (or platform linker) produces real ELF/PE/Mach-O binaries. No interpreter loop is the primary execution model.
+1. **The VM is secondary.** A bytecode VM (`m5rv`) exists ONLY for sandboxed/embedded use cases. It is not the main path. The main path is: source → LLVM IR → native binary.
+1. **Zero runtime required for simple programs.** A Hello World binary must have NO mandatory runtime dependency. The stdlib is linkable as a static archive.
+1. **The GC is opt-in.** Programs that do not use GC-managed types compile without the GC linked in. Manual memory management is fully available.
+1. **The ABI is documented and stable.** Every calling convention, struct layout, name mangling rule, and symbol visibility rule is specified and must be implemented exactly.
+1. **The FFI is first-class.** Calling C functions from m5rcode and calling m5rcode from C must both work without any wrapper generation tool.
+1. **Errors are precise.** Every compiler error includes file, line, column, a source snippet, a caret indicator, and a unique error code. The runtime produces symbolicated stack traces on fault, including inlined frames.
+1. **The toolchain is self-hostable.** The language must be expressive enough that its own standard library can be written in m5rcode (with a thin C bootstrap layer for syscalls only).
+1. **Thread safety is explicit and verified.** The type system tracks shared mutable state. Races are compile-time errors, not runtime surprises.
+1. **No undefined behavior goes undetected in debug builds.** Integer overflow, out-of-bounds access, use-after-free, null dereference — all are caught with zero-cost in release builds via a UBSan-equivalent pass that can be toggled.
+
+-----
+
+## PART 1 — COMPILER ARCHITECTURE
+
+### 1.1 Pipeline Stages
+
+```
+Source (.m5r)
+    │
+    ▼
+┌─────────────┐
+│   LEXER     │  Hand-written in C. Zero regex. Zero flex/bison.
+└──────┬──────┘
+       │  Token stream
+       ▼
+┌─────────────┐
+│   PARSER    │  Hand-written recursive descent. Produces a typed AST.
+└──────┬──────┘
+       │  AST
+       ▼
+┌──────────────────┐
+│ MACRO EXPANDER   │  Compile-time macro system (comptime evaluation)
+└──────┬───────────┘
+       │  Expanded AST
+       ▼
+┌──────────────────────┐
+│ SEMANTIC ANALYZER    │  Type inference, ownership checking,
+│ + TYPE INFERENCER    │  borrow checking, effect tracking,
+│ + BORROW CHECKER     │  thread-safety verification
+└──────┬───────────────┘
+       │  Annotated AST
+       ▼
+┌─────────────────┐
+│   HIR LOWERING  │  High-level IR: SSA form, monomorphization
+└──────┬──────────┘
+       │  HIR
+       ▼
+┌─────────────────┐
+│   MIR LOWERING  │  Mid-level IR: explicit drops, borrow regions,
+│                 │  control flow graph, loop canonicalization
+└──────┬──────────┘
+       │  MIR
+       ▼
+┌──────────────────────┐
+│  OPTIMIZATION PASSES │
+│  • DCE               │  Dead code elimination
+│  • Inlining          │  Heuristic-based function inlining
+│  • Constant folding  │
+│  • Escape analysis   │  Stack-allocate heap escapes where possible
+│  • Devirtualization  │  Monomorphic call site optimization
+│  • Loop unrolling    │
+│  • Tail call elim.   │
+│  • SROA              │  Scalar replacement of aggregates
+└──────┬───────────────┘
+       │  Optimized MIR
+       ▼
+┌──────────────────┐
+│  LLVM IR EMITTER │  Produces LLVM IR (.ll) targeting the host triple
+└──────┬───────────┘
+       │  LLVM IR
+       ▼
+┌──────────────────┐
+│  LLVM BACKEND    │  llc → .o object files
+│  (via libLLVM)   │  lld/link/ld → native binary / .so / .lib / .dll
+└──────────────────┘
+```
+
+### 1.2 Compiler Binaries
+
+**`m5rc`** — The main compiler
+
+```
+USAGE:
+  m5rc [OPTIONS] <files...>
+
+OPTIONS:
+  --target <triple>        Target triple (e.g. x86_64-pc-windows-msvc,
+                           x86_64-unknown-linux-gnu, aarch64-apple-darwin)
+  --emit <kind>            Comma-separated: tokens,ast,hir,mir,llvm-ir,asm,obj,bin
+  --opt <level>            0=none 1=basic 2=full 3=aggressive (default: 2)
+  --lto                    Enable link-time optimization
+  --debug                  Emit DWARF debug info (or PDB on Windows)
+  --strip                  Strip all symbols from output
+  --pic                    Generate position-independent code
+  --pie                    Generate position-independent executable
+  --shared                 Produce a shared library (.so/.dll/.dylib)
+  --static                 Link statically (no shared lib deps)
+  --out <path>             Output file path
+  --lib-path <path>        Add library search path
+  --link <lib>             Link against library
+  --define <K>=<V>         Define a compile-time constant
+  --features <list>        Enable CPU feature flags (e.g. avx2,bmi2)
+  --sanitize <list>        Enable sanitizers: address,memory,thread,ub
+  --coverage               Instrument for code coverage (gcov-compatible)
+  --profile                Instrument for profiling (perf-compatible)
+  --no-stdlib              Do not link the m5rcode standard library
+  --no-builtins            Do not inject compiler builtins
+  --comptime-trace         Trace comptime evaluation
+  --error-limit <n>        Stop after n errors (default: 20)
+  --color <auto|on|off>    Control ANSI color in output
+  --json-errors            Emit errors as JSON (for IDE integration)
+  --verify-ir              Run LLVM IR verifier pass (debug compiler builds)
+  --time-passes            Print timing for each compiler pass
+  --parallel <n>           Number of parallel compilation jobs
+  --incremental <dir>      Enable incremental compilation with cache dir
+  --check                  Type-check only, do not emit code
+  --strict                 All warnings become errors
+  --wall                   Enable all warnings
+  --pedantic               Enforce strictest language interpretation
+  --version                Print version string
+  --help                   Print help
+```
+
+**`m5r`** — Runner / build tool
+
+```
+USAGE:
+  m5r run <file.m5r> [-- <args>]    Compile and run
+  m5r build [--release]             Build project from m5r.toml
+  m5r test [--filter <pattern>]     Run test suite
+  m5r bench                         Run benchmarks
+  m5r clean                         Clean build artifacts
+  m5r fmt [--check]                 Format source files
+  m5r lint                          Run linter
+  m5r doc [--serve]                 Generate documentation
+  m5r new <name> [--lib|--bin]      Create new project
+  m5r init                          Initialize project in current dir
+  m5r add <dep>[@<version>]         Add dependency
+  m5r update                        Update dependencies
+  m5r publish                       Publish to registry
+  m5r lsp                           Start Language Server Protocol daemon
+```
+
+-----
+
+## PART 2 — TYPE SYSTEM (FULL SPECIFICATION)
+
+m5rcode has a REAL type system. Types are NOT masks over 64-bit words (that was the toy version). Types are first-class, compile-time verified, and form the backbone of memory safety.
+
+### 2.1 Primitive Types
+
+|Type Token|Width        |Description                               |
+|----------|-------------|------------------------------------------|
+|`#i8`     |8-bit        |Signed integer                            |
+|`#i16`    |16-bit       |Signed integer                            |
+|`#i32`    |32-bit       |Signed integer                            |
+|`#i64`    |64-bit       |Signed integer                            |
+|`#i128`   |128-bit      |Signed integer                            |
+|`#isize`  |pointer-width|Signed integer                            |
+|`#u8`     |8-bit        |Unsigned integer                          |
+|`#u16`    |16-bit       |Unsigned integer                          |
+|`#u32`    |32-bit       |Unsigned integer                          |
+|`#u64`    |64-bit       |Unsigned integer                          |
+|`#u128`   |128-bit      |Unsigned integer                          |
+|`#usize`  |pointer-width|Unsigned integer                          |
+|`#f32`    |32-bit       |IEEE 754 float                            |
+|`#f64`    |64-bit       |IEEE 754 double                           |
+|`#f128`   |128-bit      |Quad-precision float                      |
+|`#bit`    |1-bit        |Boolean (true/false)                      |
+|`#void`   |0-bit        |No value                                  |
+|`#never`  |—            |Type of expressions that never return     |
+|`#char`   |32-bit       |Unicode scalar value (U+0000–U+10FFFF)    |
+|`#raw`    |64-bit       |Untyped raw word (unsafe, explicit opt-in)|
+
+### 2.2 Compound Types
+
+**Tuples:**
+
+```
+( #i32, #f64, #bit )
+```
+
+**Fixed Arrays:**
+
+```
+#arr[ #i32 : 16 ]      ~~ 16-element i32 array, stack allocated
+```
+
+**Slices (fat pointer: ptr + len):**
+
+```
+#slice[ #i32 ]
+```
+
+**Strings:**
+
+```
+#str        ~~ Owned UTF-8 string (heap, GC or RAII)
+#strv       ~~ String view (borrowed, no allocation)
+```
+
+**Pointers:**
+
+```
+#ptr[ #i32 ]        ~~ Raw pointer (unsafe)
+#uptr               ~~ Untyped raw pointer (like void* in C)
+#ref[ #i32 ]        ~~ Immutable borrow (safe)
+#refmut[ #i32 ]     ~~ Mutable borrow (safe, exclusive)
+#own[ #i32 ]        ~~ Owned heap value (RAII drop on scope exit)
+#rc[ #i32 ]         ~~ Reference-counted (single-thread)
+#arc[ #i32 ]        ~~ Atomically reference-counted (multi-thread)
+#weak[ #i32 ]       ~~ Weak reference (does not prevent drop)
+#box[ #i32 ]        ~~ Heap-allocated owned value
+```
+
+**Optional (no null pointers in safe code):**
+
+```
+#opt[ #i32 ]        ~~ Some(i32) | None
+```
+
+**Result (no exceptions in safe code):**
+
+```
+#res[ #i32, #str ]  ~~ Ok(i32) | Err(str)
+```
+
+**Function types:**
+
+```
+#fn[ #i32, #i32 ] -> #i32       ~~ function pointer
+#closure[ #i32 ] -> #str        ~~ closure (captures environment)
+```
+
+**SIMD vector types:**
+
+```
+#vec[ #f32 : 4 ]    ~~ 128-bit float4 (SSE/NEON)
+#vec[ #f32 : 8 ]    ~~ 256-bit float8 (AVX)
+#vec[ #i32 : 4 ]    ~~ 128-bit int4
+```
+
+### 2.3 Type Inference
+
+The compiler uses **bidirectional type inference** (Hindley-Milner extended with subtyping). You almost never need to annotate types explicitly — but you MUST annotate:
+
+- Public vault (function) signatures
+- Frame (struct) field types
+- `#raw` and `#ptr` usage (explicit unsafe annotation required)
+
+### 2.4 Generics (Parametric Polymorphism)
+
+```
+vault max[ A :: $Ord ][ a :: A, b :: A ] -> A {|
+    ?[ ::a >>? ::b ]? {|
+        deposit ::a
+    |} :?: {|
+        deposit ::b
+    |}
+|}
+```
+
+Type parameters are prefixed with `$`. Constraints are expressed as traits (called **seals** in m5rcode).
+
+### 2.5 Seals (Traits)
+
+```
+seal:: Ord {|
+    vault cmp[ self, other :: #ref[Self] ] -> #i32
+    vault lt[ self, other :: #ref[Self] ] -> #bit
+    vault gt[ self, other :: #ref[Self] ] -> #bit
+|}
+```
+
+**Implementing a seal:**
+
+```
+impl Ord for MyType {|
+    vault cmp[ self, other :: #ref[Self] ] -> #i32 {|
+        deposit ::self::>val -< ::other::>val
+    |}
+    vault lt[ self, other :: #ref[Self] ] -> #bit {|
+        deposit ::self::>cmp![ ::other ] <<=? 0
+    |}
+    vault gt[ self, other :: #ref[Self] ] -> #bit {|
+        deposit ::self::>cmp![ ::other ] >>? 0
+    |}
+|}
+```
+
+**Built-in seals (compiler-provided):**
+
+- `$Clone` — can be explicitly cloned
+- `$Copy` — trivially copyable (no heap involvement)
+- `$Drop` — has a custom destructor
+- `$Send` — safe to send across thread boundaries
+- `$Sync` — safe to share references across threads
+- `$Ord` — totally ordered
+- `$Eq` — equality comparable
+- `$Hash` — hashable
+- `$Debug` — has a debug string representation
+- `$Display` — has a human-readable string representation
+- `$Default` — has a zero/default value
+- `$Iterator` — produces a sequence of values
+- `$Into[T]` — can be converted into T
+- `$From[T]` — can be constructed from T
+- `$Index[K]` — supports indexing with key type K
+- `$Arithmetic` — supports `+> -< *>> /<`
+- `$Bitwise` — supports `&>> |<< ^~~`
+
+### 2.6 Lifetime System (Borrow Checker)
+
+m5rcode has a **borrow checker** inspired by Rust’s but with different syntax and with explicit lifetime elision rules that are less restrictive.
+
+**Lifetime annotation syntax:**
+
+```
+vault longest[ 'a ][ x :: #ref['a #str], y :: #ref['a #str] ] -> #ref['a #str] {|
+    ?[ ::x::>len![] >>? ::y::>len![] ]? {|
+        deposit ::x
+    |} :?: {|
+        deposit ::y
+    |}
+|}
+```
+
+**Lifetime elision rules** (compiler infers these automatically):
+
+1. Each input reference gets a distinct lifetime
+1. If there is exactly one input lifetime, it is assigned to all outputs
+1. If one of the inputs is `self`, its lifetime is assigned to all outputs
+
+**Ownership rules:**
+
+- Every value has exactly one owner
+- When the owner goes out of scope, the value is dropped
+- Values can be moved (ownership transferred) or borrowed (temporary reference)
+- At any point: either one mutable borrow OR any number of immutable borrows — never both
+
+### 2.7 Effect System
+
+Vaults can be annotated with **effects** that the compiler tracks and enforces:
+
+```
+vault readConfig[] -> #res[Config, #str]
+    !effects[ io::read, fault::propagate ] {|
+    ~~ ...
+|}
+```
+
+Built-in effects:
+
+- `io::read` — reads from I/O
+- `io::write` — writes to I/O
+- `io::net` — network access
+- `fault::propagate` — can raise faults (checked exceptions equivalent)
+- `alloc::heap` — performs heap allocation
+- `unsafe::ptr` — dereferences raw pointers
+- `unsafe::ffi` — calls foreign functions
+- `async::suspend` — can suspend (is async)
+- `pure` — no effects (deterministic, no I/O, no allocation)
+
+-----
+
+## PART 3 — OWNERSHIP & MEMORY MODEL
+
+### 3.1 Memory Management Strategies
+
+m5rcode supports THREE memory management strategies that can coexist in the same program:
+
+**Strategy 1: RAII (Default)**
+Owned values (`#own[T]`, `#box[T]`) are automatically freed when their scope ends. Zero runtime overhead. No GC pauses. This is the default for all stack and heap values.
+
+**Strategy 2: Reference Counting**
+`#rc[T]` and `#arc[T]` provide reference-counted heap values. `#weak[T]` prevents cycles from leaking. Drop is deterministic.
+
+**Strategy 3: GC Arena (Opt-in)**
+Modules that `^use "@gc"` get access to GC-managed allocations. The GC is a **concurrent tri-color incremental mark-and-sweep** with a write barrier. GC-managed values use `#gc[T]`. The GC runs on a dedicated thread and pauses are bounded (< 1ms target for heaps < 1GB).
+
+**Manual Memory (Unsafe):**
+
+```
+^unsafe {|
+    >> p :: #ptr[#i32]
+    p <- @mem::alloc![ 4 ]
+    <<@ ::p <- 42
+    @mem::free![ ::p ]
+|}
+```
+
+### 3.2 Stack Allocation Guarantees
+
+The compiler guarantees stack allocation for:
+
+- All primitives
+- Fixed arrays whose size is known at compile time
+- Frames (structs) that do not contain `#own`/`#box`/`#rc`/`#arc` fields
+- Closures that do not escape their defining scope (escape analysis)
+- Slices whose backing array is stack-allocated
+
+### 3.3 Slab Allocator
+
+The default heap allocator is a **size-class slab allocator** with thread-local caches (similar to jemalloc/tcmalloc). It is implemented in C and linked into the m5rcode runtime. Users can replace it by implementing the `$Allocator` seal and passing it to `@mem::set_global_allocator![]`.
+
+-----
+
+## PART 4 — NATIVE FFI SYSTEM (FULL SPECIFICATION)
+
+### 4.1 Calling C from m5rcode
+
+```
+^ffi "C" {|
+    ^extern vault MessageBoxA[
+        hWnd    :: #ptr[#void],
+        lpText  :: #ptr[#u8],
+        lpCap   :: #ptr[#u8],
+        uType   :: #u32
+    ] -> #i32
+
+    ^extern vault LoadLibraryA[
+        lpLibFileName :: #ptr[#u8]
+    ] -> #ptr[#void]
+
+    ^extern vault GetProcAddress[
+        hModule :: #ptr[#void],
+        lpProcName :: #ptr[#u8]
+    ] -> #ptr[#void]
+
+    ^extern vault FreeLibrary[
+        hModule :: #ptr[#void]
+    ] -> #i32
+|}
+```
+
+**`^ffi "C"` block rules:**
+
+- All vaults declared inside are `extern "C"` with C calling convention
+- On Windows x86_64: Microsoft x64 calling convention (rcx, rdx, r8, r9, xmm0–xmm3)
+- On Linux/macOS x86_64: System V AMD64 ABI (rdi, rsi, rdx, rcx, r8, r9, xmm0–xmm7)
+- On ARM64: AAPCS64
+- The compiler emits `declare` statements in LLVM IR for these symbols
+- Linking must be done via `--link <libname>` or `#[link(name = "...")]` attribute
+
+**Calling an extern vault:**
+
+```
+^unsafe {|
+    >> result :: #i32
+    MessageBoxA![
+        >>null,
+        "world\0"::>as_ptr![],
+        "hello\0"::>as_ptr![],
+        0x00000010
+    ] ->| >>result
+|}
+```
+
+### 4.2 Calling Conventions
+
+Specify per-extern-vault:
+
+```
+^ffi "stdcall" {|    ~~ Win32 __stdcall
+    ^extern vault SomeWin32Api[ ... ] -> #i32
+|}
+
+^ffi "fastcall" {|   ~~ __fastcall
+    ...
+|}
+
+^ffi "C" {|          ~~ cdecl (default)
+    ...
+|}
+
+^ffi "system" {|     ~~ Platform default (stdcall on win32, C on others)
+    ...
+|}
+```
+
+### 4.3 Dynamic Library Loading
+
+```
+^use "@ffi"
+
+>> lib :: #ffi::DynLib
+@ffi::DynLib::load![ "user32.dll" ] ->|? >>lib ??catch >>err {|
+    @io::eprintln![ ::err ]
+    @sys::exit![ 1 ]
+|}
+
+>> fnPtr :: #fn[#ptr[#void], #ptr[#u8], #ptr[#u8], #u32] -> #i32
+@ffi::DynLib::sym![ ::lib, "MessageBoxA" ] ->|? >>fnPtr ??catch >>err {|
+    @io::eprintln![ ::err ]
+    @sys::exit![ 1 ]
+|}
+
+^unsafe {|
+    >> r :: #i32
+    ::fnPtr![
+        >>null,
+        "world\0"::>as_ptr![],
+        "hello\0"::>as_ptr![],
+        0x00000010
+    ] ->| >>r
+|}
+
+@ffi::DynLib::close![ ::lib ]
+```
+
+### 4.4 Exporting m5rcode to C
+
+```
+^export "C" vault myFunction[ x :: #i32 ] -> #i32 {|
+    deposit ::x *>> 2
+|}
+```
+
+This emits the symbol `myFunction` with C linkage, callable from any C program.
+
+### 4.5 C Header Generation
+
+```
+m5rc --emit c-header mylib.m5r --out mylib.h
+```
+
+Automatically generates a `.h` file for all `^export "C"` vaults, with correct types.
+
+### 4.6 Inline Assembly
+
+```
+^unsafe {|
+    >> result :: #u64
+    ^asm "x86_64" {|
+        "mov rax, {0}"
+        "add rax, {1}"
+        "mov {2}, rax"
+        :: in("rax") ::a
+        :: in("rbx") ::b
+        :: out ::result
+        :: clobbers "rax", "rbx", "flags"
+    |}
+|}
+```
+
+Inline asm uses a syntax inspired by LLVM inline asm. Clobber lists are required. The compiler validates register names for the target architecture.
+
+-----
+
+## PART 5 — SYNTAX SPECIFICATION (COMPLETE)
+
+### 5.1 File Sigil Block (Unchanged from v1, required)
+
+```
+%%m5r
+@ident: <module_name>
+@ver:   <semver>
+@author: <string>
+@target: <platform_guard>   ~~ optional: "windows" | "linux" | "macos" | "any"
+%%
+```
+
+### 5.2 Comments (Unchanged from v1)
+
+```
+~~ single line
+~~[ multiline ]~~
+```
+
+### 5.3 Cell Declarations (Variables — enhanced)
+
+```
+>> name :: <type>                   ~~ immutable cell (like const)
+>>~ name :: <type>                  ~~ mutable cell (like let mut)
+>>^ name :: <type>                  ~~ comptime cell (evaluated at compile time)
+>>* name :: <type>                  ~~ static cell (lives for entire program lifetime)
+>>*~ name :: <type>                 ~~ mutable static (requires ^unsafe to access)
+>>t name :: <type>                  ~~ thread-local cell
+```
+
+**Assignment:**
+
+```
+name <- <expr>          ~~ move or copy depending on type
+name <~~ <expr>         ~~ clone (explicit deep copy)
+name <-> other          ~~ swap two cells
+```
+
+### 5.4 Operators (Extended)
+
+All operators from v1, plus:
+
+**Safe arithmetic (fault on overflow):**
+
+|Symbol|Operation                                 |
+|------|------------------------------------------|
+|`+>?` |Checked add (deposits None on overflow)   |
+|`-<?` |Checked sub                               |
+|`*>>?`|Checked mul                               |
+|`+>~` |Wrapping add (wraps on overflow, no fault)|
+|`-<~` |Wrapping sub                              |
+|`*>>~`|Wrapping mul                              |
+|`+>^` |Saturating add                            |
+|`-<^` |Saturating sub                            |
+
+**Pointer arithmetic (unsafe only):**
+
+|Symbol|Operation                          |
+|------|-----------------------------------|
+|`->@` |Pointer offset (byte)              |
+|`->@>`|Pointer offset (element-size steps)|
+|`@>>` |Address-of                         |
+|`<<@` |Dereference                        |
+
+**Range operators:**
+
+|Symbol|Meaning                    |
+|------|---------------------------|
+|`~>`  |Exclusive range (a..b)     |
+|`~>=` |Inclusive range (a..=b)    |
+|`~>*` |Infinite range from a (a..)|
+
+**Pipeline operator:**
+
+```
+::value \|> someVault \|> anotherVault
+```
+
+Equivalent to: `anotherVault![ someVault![ ::value ] ]`
+
+**Null coalescing:**
+
+```
+::optValue ??> defaultValue
+```
+
+Returns the inner value if `Some`, else `defaultValue`.
+
+**Try operator (fault propagation shorthand):**
+
+```
+someVault![ ::arg ]??   ~~ propagates fault upward if Err
+```
+
+### 5.5 Comptime (Compile-Time Evaluation)
+
+```
+>>^ SIZE :: #usize <- 1024
+
+>>^ MAX_CONNECTIONS :: #usize <- ^comptime {|
+    deposit ::SIZE *>> 4
+|}
+
+^comptime {|
+    ?[ ::TARGET_OS ==? "windows" ]? {|
+        ^include "platform/win32.m5r"
+    |} :?: {|
+        ^include "platform/posix.m5r"
+    |}
+|}
+```
+
+**Comptime generics (type-level computation):**
+
+```
+vault^comptime alignedSize[ T :: $Type, align :: #usize ] -> #usize {|
+    >> size :: #usize <- ^sizeof[ T ]
+    >> rem  :: #usize <- ::size %^ ::align
+    ?[ ::rem ==? 0 ]? {|
+        deposit ::size
+    |} :?: {|
+        deposit ::size +> ( ::align -< ::rem )
+    |}
+|}
+```
+
+### 5.6 Macros
+
+Declarative macros (pattern-matching, hygienic):
+
+```
+macro! assert {|
+    ( ::cond ) => {|
+        ?[ !!^ ::cond ]? {|
+            ??fault @str::format![ "assertion failed at {}:{}", ^file, ^line ]
+        |}
+    |}
+    ( ::cond, ::msg ) => {|
+        ?[ !!^ ::cond ]? {|
+            ??fault ::msg
+        |}
+    |}
+|}
+```
+
+Procedural macros (operate on token streams, written in m5rcode):
+
+```
+^use "@meta::proc"
+
+vault^procmacro derive_debug[ input :: #meta::TokenStream ] -> #meta::TokenStream {|
+    ~~ generates Debug impl for any frame
+    ~~ ...
+|}
+```
+
+Built-in compile-time intrinsics:
+
+- `^sizeof[T]` — size of type T in bytes
+- `^alignof[T]` — alignment of type T in bytes
+- `^offsetof[Frame, field]` — byte offset of field in frame
+- `^file` — current source file as #str
+- `^line` — current line number as #usize
+- `^col` — current column as #usize
+- `^module` — current module name as #str
+- `^fnname` — current vault name as #str
+- `^cfg[key]` — compile-time config flag query
+- `^typeof[expr]` — type of expression as string (comptime only)
+- `^typeinfo[T]` — runtime type info struct (if reflection enabled)
+
+### 5.7 Closures
+
+```
+>> add :: #closure[#i32, #i32] -> #i32
+add <- {| a, b ~~ ::a +> ::b |}
+
+>> result :: #i32
+add![ 3, 4 ] ->| >>result
+```
+
+Closures capture by borrow by default. To capture by move:
+
+```
+>> n :: #i32 <- 10
+>> adder :: #closure[#i32] -> #i32
+adder <- ^move {| x ~~ ::x +> ::n |}
+```
+
+### 5.8 Pattern Matching (Full)
+
+```
+??[ ::value ] {|
+    => ( x :: #i32 ) if ::x >>? 0 :: {| @io::println![ "positive" ] |}
+    => ( 0 ) :: {| @io::println![ "zero" ] |}
+    => ( x :: #i32 ) if ::x <<? 0 :: {| @io::println![ "negative" ] |}
+|}
+
+~~ Matching on frames
+??[ ::point ] {|
+    => Point { x: 0, y: 0 } :: {| @io::println![ "origin" ] |}
+    => Point { x: ::px, y: 0 } :: {| @io::println![ "on x-axis" ] |}
+    => Point { x: 0, y: ::py } :: {| @io::println![ "on y-axis" ] |}
+    => Point { x: ::px, y: ::py } :: {| @io::println![ "somewhere" ] |}
+|}
+
+~~ Matching on enums (called "variants" in m5rcode)
+??[ ::result ] {|
+    => Ok[ ::v ] :: {| @io::println![ ::v ] |}
+    => Err[ ::e ] :: {| @io::eprintln![ ::e ] |}
+|}
+
+~~ OR patterns
+??[ ::n ] {|
+    => ( 1 | 2 | 3 ) :: {| @io::println![ "small" ] |}
+    =>_ :: {| @io::println![ "big" ] |}
+|}
+
+~~ Tuple patterns
+??[ ( ::a, ::b ) ] {|
+    => ( 0, 0 ) :: {| @io::println![ "origin" ] |}
+    => ( ::x, 0 ) :: {| @io::println![ "x-axis" ] |}
+    =>_ :: {| @io::println![ "other" ] |}
+|}
+```
+
+### 5.9 Variants (Enums / Tagged Unions)
+
+```
+variant:: Shape {|
+    Circle { radius :: #f64 }
+    Rectangle { width :: #f64, height :: #f64 }
+    Triangle { base :: #f64, height :: #f64 }
+    Point
+|}
+```
+
+**With seal implementations:**
+
+```
+impl Display for Shape {|
+    vault fmt[ self ] -> #str {|
+        ??[ ::self ] {|
+            => Shape::Circle { radius: ::r } :: {|
+                deposit @str::format![ "Circle(r={})", ::r ]
+            |}
+            => Shape::Rectangle { width: ::w, height: ::h } :: {|
+                deposit @str::format![ "Rect({}x{})", ::w, ::h ]
+            |}
+            =>_ :: {| deposit "other shape" |}
+        |}
+    |}
+|}
+```
+
+### 5.10 Async/Await (Built-in async runtime)
+
+```
+vault^async fetchData[ url :: #str ] -> #res[#str, #str]
+    !effects[ io::net, async::suspend ] {|
+    >> resp :: #str
+    @net::httpGet![ ::url ] await ->|? >>resp ??catch >>err {|
+        deposit Err[ ::err ]
+    |}
+    deposit Ok[ ::resp ]
+|}
+
+^fwd ^main {|
+    >> data :: #res[#str, #str]
+    fetchData![ "https://example.com" ] await ->| >>data
+    ??[ ::data ] {|
+        => Ok[ ::v ] :: {| @io::println![ ::v ] |}
+        => Err[ ::e ] :: {| @io::eprintln![ ::e ] |}
+    |}
+|}
+```
+
+The async runtime is an M:N scheduler (many async tasks on few OS threads), implemented in m5rcode + C. It uses `io_uring` on Linux, IOCP on Windows, and `kqueue` on macOS.
+
+### 5.11 Operator Overloading
+
+```
+impl $Arithmetic for Vec2 {|
+    vault +>[ self, other :: #ref[Vec2] ] -> Vec2 {|
+        deposit Vec2::new![ self::>x +> other::>x, self::>y +> other::>y ]
+    |}
+    vault -<[ self, other :: #ref[Vec2] ] -> Vec2 {|
+        deposit Vec2::new![ self::>x -< other::>x, self::>y -< other::>y ]
+    |}
+|}
+```
+
+### 5.12 Reflection (Optional, feature-gated)
+
+```
+^use "@reflect"
+
+>> t :: #reflect::TypeInfo <- ^typeinfo[MyFrame]
+@io::println![ ::t::>name ]
+@@each[ ::t::>fields ] as >>field >>_ {|
+    @io::println![ ::field::>name ]
+    @io::println![ ::field::>type_name ]
+|}
+```
+
+-----
+
+## PART 6 — FRAME SYSTEM (STRUCTS — FULL SPECIFICATION)
+
+### 6.1 Frame Declaration
+
+```
+frame:: Vec3 {|
+    x :: #f64
+    y :: #f64
+    z :: #f64
+|}
+```
+
+### 6.2 Frame Memory Layout
+
+By default, frames use **natural alignment with padding**. Override with:
+
+```
+frame^packed:: PackedData {|    ~~ no padding
+    a :: #u8
+    b :: #u32
+    c :: #u16
+|}
+
+frame^align[64]:: CacheLine {|   ~~ 64-byte aligned (cache-line)
+    data :: #arr[#u8 : 64]
+|}
+
+frame^repr[C]:: CCompatible {|   ~~ C-compatible layout, no reordering
+    x :: #i32
+    y :: #i32
+|}
+
+frame^repr[transparent]:: Wrapper {|  ~~ single-field, same layout as inner
+    inner :: #i32
+|}
+```
+
+### 6.3 Frame Vaults (Methods)
+
+```
+frame:: Vec3 {|
+    x :: #f64
+    y :: #f64
+    z :: #f64
+
+    vault::static new[ x :: #f64, y :: #f64, z :: #f64 ] -> Vec3 {|
+        deposit Vec3 { x: ::x, y: ::y, z: ::z }
+    |}
+
+    vault::self length[ ] -> #f64 {|
+        deposit @math::sqrt![
+            self::>x *>> self::>x
+            +> self::>y *>> self::>y
+            +> self::>z *>> self::>z
+        ]
+    |}
+
+    vault::self normalize[ ] -> Vec3 {|
+        >> len :: #f64
+        self::>length![] ->| >>len
+        deposit Vec3::new![
+            self::>x /< ::len,
+            self::>y /< ::len,
+            self::>z /< ::len
+        ]
+    |}
+
+    vault::self dot[ other :: #ref[Vec3] ] -> #f64 {|
+        deposit self::>x *>> other::>x
+             +> self::>y *>> other::>y
+             +> self::>z *>> other::>z
+    |}
+|}
+```
+
+### 6.4 Destructors
+
+```
+impl $Drop for MyResource {|
+    vault drop[ self ] {|
+        ~~ called automatically when owner scope ends
+        @io::println![ "cleaning up MyResource" ]
+        ^unsafe {| @mem::free![ self::>raw_ptr ] |}
+    |}
+|}
+```
+
+-----
+
+## PART 7 — MODULE & BUILD SYSTEM
+
+### 7.1 Module Declaration
+
+Each file is a module. Module name must match file name.
+
+```
+%%m5r
+@ident: math::vector
+@ver:   1.0.0
+@author: user
+%%
+```
+
+### 7.2 Project Manifest (`m5r.toml`)
+
+```toml
+[project]
+name    = "myapp"
+version = "1.0.0"
+authors = ["User <user@example.com>"]
+edition = "2025"
+
+[build]
+entry   = "src/main.m5r"
+target  = "x86_64-pc-windows-msvc"
+opt     = 2
+debug   = false
+lto     = true
+strip   = true
+
+[features]
+gc      = false
+reflect = false
+async   = true
+
+[dependencies]
+m5r-http    = "^1.2.0"
+m5r-json    = "^0.9.0"
+m5r-crypto  = "^2.0.0"
+
+[dev-dependencies]
+m5r-test    = "^1.0.0"
+
+[profile.release]
+opt   = 3
+lto   = true
+strip = true
+panic = "abort"
+
+[profile.debug]
+opt       = 0
+debug     = true
+sanitize  = ["address", "ub"]
+```
+
+### 7.3 Dependency Resolution
+
+- Packages are `.m5rp` archives (zstd-compressed tar with a `m5r.toml` inside)
+- Version resolution uses **Semantic Versioning** with a **PubGrub**-like SAT solver
+- Lock file: `m5r.lock` (deterministic, committed to version control)
+- Registry: configurable URL, default `https://registry.m5rcode.org`
+- Private registries supported via `[registries]` in `~/.m5r/config.toml`
+
+-----
+
+## PART 8 — STANDARD LIBRARY (COMPLETE)
+
+The standard library is written in m5rcode (with C syscall shims). It compiles to a static archive `libm5rstd.a` / `m5rstd.lib`.
+
+### 8.1 `@io` — I/O
+
+Full buffered + unbuffered I/O. Stdin/stdout/stderr. File handles. Pipes. TTY detection. ANSI escape support. Printf-compatible formatting. All async-capable.
+
+### 8.2 `@fs` — File System
+
+Full POSIX + Win32 file system operations. Directory traversal. File watching (inotify/FSEvents/ReadDirectoryChangesW). Symlinks. Hard links. Permissions. Extended attributes.
+
+### 8.3 `@net` — Networking
+
+TCP/UDP sockets. TLS (via bundled rustls port or system OpenSSL). HTTP/1.1 and HTTP/2 client. HTTP/1.1 server. WebSocket client/server. DNS resolution. Unix domain sockets. Async-native.
+
+### 8.4 `@str` — Strings
+
+Full Unicode support (UAX #29 grapheme clusters). UTF-8/16/32 conversion. Regex engine (PCRE2-compatible syntax). String formatting (printf + named args). String interning. Builder pattern.
+
+### 8.5 `@math` — Mathematics
+
+All C99 math functions. SIMD-accelerated vector math. Matrix operations. Complex numbers. Big integers (`#bigint`). Arbitrary precision decimals (`#decimal`). Statistics primitives. Random number generation (ChaCha20, Xoshiro256**).
+
+### 8.6 `@collections` — Data Structures
+
+`HashMap`, `BTreeMap`, `HashSet`, `BTreeSet`, `VecDeque`, `LinkedList`, `BinaryHeap`, `SkipList`, `Arena`, `Pool`, `RingBuffer`. All implement standard seals (`$Iterator`, `$Clone`, `$Debug`, etc.).
+
+### 8.7 `@sync` — Synchronization
+
+`Mutex`, `RwLock`, `Condvar`, `Barrier`, `Semaphore`, `Once`, `AtomicI8..AtomicI64`, `AtomicU8..AtomicU64`, `AtomicBool`, `AtomicPtr`. Memory ordering: `SeqCst`, `Acquire`, `Release`, `Relaxed`, `AcqRel`.
+
+### 8.8 `@thread` — Threading
+
+OS thread creation and management. Thread pools. Work-stealing scheduler. Thread-local storage. `^toe` syntax compiles to this module.
+
+### 8.9 `@async` — Async Runtime
+
+Event loop. Task spawning. Timers. Select/join combinators. Channels (bounded/unbounded, sync/async). `await` keyword support. Async I/O integration.
+
+### 8.10 `@ffi` — Foreign Function Interface
+
+Dynamic library loading. Symbol resolution. C string utilities (`@ffi::cstr`). Pointer arithmetic helpers. Memory layout utilities. Platform detection.
+
+### 8.11 `@sys` — System
+
+CLI arguments. Environment variables. Process spawning (`Command` builder). Signals. Exit codes. Platform info. CPU feature detection. Memory pages (mmap/VirtualAlloc).
+
+### 8.12 `@time` — Time
+
+Monotonic clock. Wall clock. Date/time parsing and formatting (ISO 8601, RFC 2822, RFC 3339). Timezone support. Duration arithmetic. Elapsed timers.
+
+### 8.13 `@json` — JSON (Built into stdlib)
+
+Deserialize to m5rcode frames via derive macro. Serialize from m5rcode frames. Streaming parser. Serde-compatible interface.
+
+### 8.14 `@log` — Logging
+
+Structured logging with levels (trace/debug/info/warn/error). Pluggable backends. Zero-cost disabled levels. JSON log output option.
+
+### 8.15 `@test` — Testing Framework
+
+Unit test annotation (`^test`). Benchmark annotation (`^bench`). Property-based testing (QuickCheck-style). Assertion macros. Test runner with parallel execution and output capture. Code coverage integration.
+
+### 8.16 `@mem` — Memory Utilities
+
+Manual allocation/deallocation. Alignment utilities. memcpy/memmove/memset (compiler intrinsics). Stack allocation (`@mem::alloca`). Custom allocator interface. Memory-mapped files.
+
+### 8.17 `@gc` — Garbage Collector (opt-in)
+
+GC-managed allocation. Root registration. Manual collection trigger. GC statistics. Weak references. Finalizers.
+
+### 8.18 `@meta` — Metaprogramming
+
+Token stream types for procedural macros. AST node types. Compile-time reflection. Code generation utilities.
+
+### 8.19 `@crypto` — Cryptography
+
+SHA-256/512, BLAKE3. AES-GCM, ChaCha20-Poly1305. HMAC. PBKDF2, Argon2. X25519, Ed25519. CSPRNG. Constant-time comparison.
+
+### 8.20 `@fmt` — Formatting
+
+String formatting engine. Writer trait. Display/Debug implementations. Padding, alignment, precision, width formatting.
+
+-----
+
+## PART 9 — PLATFORM-SPECIFIC MODULES
+
+### 9.1 `@win32` — Windows API (Windows only)
+
+```
+^use "@win32"
+^use "@win32::ui"
+^use "@win32::gdi"
+^use "@win32::registry"
+^use "@win32::com"
+```
+
+All Win32 APIs are available as typed m5rcode extern vaults. Types like `HWND`, `HMODULE`, `DWORD`, `LPCSTR` are defined as m5rcode type aliases. COM interface support via a generated wrapper system.
+
+### 9.2 `@posix` — POSIX APIs (Linux/macOS)
+
+```
+^use "@posix"
+^use "@posix::signal"
+^use "@posix::mman"
+^use "@posix::socket"
+```
+
+### 9.3 `@linux` — Linux-specific
+
+```
+^use "@linux::io_uring"
+^use "@linux::seccomp"
+^use "@linux::ebpf"
+^use "@linux::perf"
+```
+
+### 9.4 `@macos` — macOS-specific
+
+```
+^use "@macos::objc"
+^use "@macos::cocoa"
+^use "@macos::metal"
+^use "@macos::corefoundation"
+```
+
+-----
+
+## PART 10 — DEBUGGER & TOOLING
+
+### 10.1 Debug Info
+
+- Linux/macOS: **DWARF 5** format embedded in ELF/Mach-O
+- Windows: **PDB** format (full CodeView + DBI stream)
+- Source maps for all inlined functions
+- Type info for all user-defined frames and variants
+
+### 10.2 GDB/LLDB Integration
+
+- Pretty-printers for all stdlib types (`@str`, `#opt`, `#res`, `HashMap`, etc.)
+- m5rcode-specific `xmethods` for GDB
+- Shipped as Python scripts in `tools/debugger/`
+
+### 10.3 `m5rprof` — Profiler
+
+- Sampling profiler (perf/dtrace backend)
+- Flame graph output (SVG)
+- Allocation profiler (tracks every heap allocation)
+- Async task profiler (shows task timelines)
+
+### 10.4 `m5rsan` — Sanitizers
+
+Compile with `--sanitize address,memory,thread,ub`:
+
+- **AddressSanitizer**: heap/stack/global buffer overflows, use-after-free
+- **MemorySanitizer**: uninitialized memory reads
+- **ThreadSanitizer**: data races
+- **UndefinedBehaviorSanitizer**: integer overflow, misaligned access, null deref
+
+### 10.5 `m5rfmt` — Code Formatter
+
+- Deterministic, opinionated formatter (no configuration — one style)
+- Preserves comments and blank lines
+- Idempotent
+- `m5r fmt` runs it in-place; `m5r fmt --check` returns exit code 1 if unformatted
+
+### 10.6 `m5rlint` — Linter
+
+Checks for:
+
+- Unused cells
+- Unreachable code
+- Shadowed cells
+- Unnecessary clones
+- Inefficient patterns
+- Missing error handling
+- Deprecated API usage
+- Complexity metrics (cyclomatic complexity threshold)
+- Custom lint rules via plugin API
+
+### 10.7 Language Server Protocol (LSP)
+
+`m5r lsp` starts a fully compliant LSP server supporting:
+
+- **Hover**: type info, documentation
+- **Completion**: context-aware, ranked by type compatibility
+- **Go to definition**: cross-file, cross-module
+- **Find references**: project-wide
+- **Rename**: safe, cross-file
+- **Diagnostics**: real-time errors and warnings as you type
+- **Code actions**: quick fixes for common errors
+- **Format on save**: calls `m5rfmt`
+- **Inlay hints**: inferred types shown inline
+- **Semantic highlighting**: token-level language-aware coloring
+- **Call hierarchy**: incoming/outgoing call trees
+- **Document symbols**: outline of all cells, vaults, frames in file
+- **Workspace symbols**: search across entire project
+
+### 10.8 Syntax Highlighting
+
+Ship **TextMate grammar** (`m5rcode.tmLanguage.json`) for:
+
+- VS Code extension (with LSP integration)
+- Vim/Neovim (via `nvim-treesitter` grammar)
+- Emacs (via `tree-sitter-m5rcode`)
+- JetBrains (via custom lexer plugin)
+- GitHub Linguist (`.gitattributes` + grammar registration)
+
+Also ship a **Tree-sitter grammar** (`grammar.js`) for:
+
+- Syntax highlighting
+- Code folding
+- Structural navigation
+- Indentation rules
+
+-----
+
+## PART 11 — VIRTUAL MACHINE (Secondary Path)
+
+The VM (`m5rv`) is a **register-based VM** (NOT stack-based — register-based VMs are 30–60% faster) with 256 virtual registers. It exists for:
+
+- Sandboxed execution (plugin systems, scripting hosts)
+- Platforms where LLVM is not available
+- Comptime evaluation within the compiler itself
+
+### 11.1 VM Architecture
+
+- 256 virtual registers (64-bit each, typed at the IR level)
+- Separate constant pool, code section, and heap
+- GC-integrated heap (same tri-color concurrent GC as the native runtime)
+- Bytecode format: `.m5rc` (little-endian, versioned)
+- JIT compilation: optional tiered JIT (baseline + optimizing) using copy-and-patch
+
+### 11.2 VM Instruction Set
+
+Register-based opcodes: 4-byte fixed-width instructions.
+Format: `[OPCODE:8][DST:8][SRC1:8][SRC2:8]`
+Extended format (for immediates): followed by 8-byte immediate.
+
+Full opcode table: 256 opcodes covering arithmetic, comparison, memory, control flow, calls, I/O, concurrency, GC, and FFI.
+
+-----
+
+## PART 12 — COMPILER INTERNALS
+
+### 12.1 Intermediate Representations
+
+**HIR (High-level IR):**
+
+- Desugared AST — loops expanded, pattern matches compiled to decision trees
+- Type-annotated (every node has a resolved type)
+- Monomorphized generics (one HIR copy per instantiation)
+- Lifetime-annotated (every reference has a lifetime region)
+
+**MIR (Mid-level IR):**
+
+- Control flow graph (basic blocks + terminators)
+- SSA form (Static Single Assignment)
+- Explicit drop elaboration (where owned values are freed)
+- Borrow check runs on MIR
+- UB check runs on MIR
+
+**LLVM IR:**
+
+- Emitted from MIR
+- Includes `!dbg` metadata for all instructions (when `--debug`)
+- Includes `!tbaa` (type-based alias analysis) metadata
+- Includes `!range` metadata for integer constraints
+- Includes `!nonnull` metadata for non-null pointers
+
+### 12.2 Optimization Passes (Custom, run before LLVM)
+
+1. **Escape Analysis** — determines if heap-allocated values can be stack-allocated
+1. **Monomorphization Deduplication** — merges identical generic instantiations
+1. **Closure Inlining** — inlines closures at call sites when size budget allows
+1. **Tail Recursion Elimination** — converts tail-recursive vaults to loops
+1. **Constant Folding** — evaluates constant expressions at compile time
+1. **Dead Store Elimination** — removes writes whose values are never read
+1. **Alias Analysis** — tracks which pointers may alias (feeds into DSE and CSE)
+1. **Common Subexpression Elimination** — deduplicates redundant computations
+1. **Loop-Invariant Code Motion** — hoists loop-invariant computation out of loops
+1. **Strength Reduction** — replaces expensive ops with cheaper equivalents (mul→shift, div→reciprocal-mul)
+1. **Devirtualization** — converts virtual dispatch to direct calls at monomorphic call sites
+1. **Profile-Guided Optimization (PGO)** — uses runtime profiling data to guide inlining and branch prediction
+
+After custom passes, full **LLVM optimization pipeline** (O0–O3 + LTO) is applied.
+
+### 12.3 Incremental Compilation
+
+- Query-based compilation model (inspired by rustc’s query system)
+- Each compilation unit is a module (`.m5r` file)
+- Fingerprints track which modules changed
+- Only changed modules and their dependents recompile
+- Cache stored in `.m5r_cache/` directory (configurable)
+- Cache is invalidated on compiler version change
+
+-----
+
+## PART 13 — ERROR HANDLING (COMPLETE)
+
+### 13.1 Error Display Format
+
+```
+[M5R-FAULT] E003: type mask mismatch
+  --> src/main.m5r:42:17
+   |
+41 | >> count :: #i32
+42 | count <- 3.14
+   |          ^^^^ expected #i32, found #f64
+   |
+   = note: implicit numeric coercion is not allowed in m5rcode
+   = help: use @math::round![] or cast explicitly with `count <- ::floatVal::>as[#i32]`
+[M5R-FAULT] E005: wrong argument count
+  --> src/main.m5r:88:5
+   |
+88 | add![ 1, 2, 3 ]
+   | ^^^^^^^^^^^^^^^ vault `add` takes 2 arguments, but 3 were supplied
+   |
+  ::: src/math.m5r:12:1
+   |
+12 | vault add[ a :: #i32, b :: #i32 ] -> #i32 {|
+   | ---- defined here
+```
+
+### 13.2 Error Codes (Full List)
+
+**Lexer errors (L001–L099):**
+
+- L001: Invalid character
+- L002: Unterminated string literal
+- L003: Invalid escape sequence
+- L004: Integer literal overflow
+- L005: Invalid numeric base prefix
+- L006: Unterminated block comment
+
+**Parser errors (P001–P099):**
+
+- P001: Unexpected token
+- P002: Expected expression
+- P003: Unmatched block delimiter
+- P004: Missing sigil block
+- P005: Invalid sigil field
+- P006: Expected type mask
+- P007: Invalid operator
+- P008: Missing `deposit` in vault body
+
+**Semantic errors (E001–E199):**
+
+- E001: Undeclared cell
+- E002: Cell used before initialization
+- E003: Type mismatch
+- E004: Vault not found
+- E005: Wrong argument count
+- E006: Cannot borrow as mutable (already borrowed immutably)
+- E007: Cannot borrow as mutable (cell is not declared with `>>~`)
+- E008: Borrow outlives owner
+- E009: Use of moved value
+- E010: Circular import
+- E011: Import not found
+- E012: Seal not implemented for type
+- E013: Lifetime mismatch
+- E014: Missing effect annotation
+- E015: Cannot use `await` outside async vault
+- E016: Comptime evaluation failed
+- E017: Generic type parameter cannot be inferred
+- E018: Conflicting seal implementations
+- E019: Orphan rule violation
+- E020: Recursive type without indirection
+
+**Runtime faults (R001–R099):**
+
+- R001: Integer division by zero
+- R002: Integer overflow (checked arithmetic)
+- R003: Null pointer dereference
+- R004: Array index out of bounds
+- R005: Stack overflow (recursion too deep)
+- R006: Heap exhaustion (OOM)
+- R007: Invalid UTF-8 sequence
+- R008: Fault propagated uncaught
+- R009: Assertion failed
+- R010: Unreachable code reached
+
+-----
+
+## PART 14 — TEST FRAMEWORK (BUILT-IN)
+
+### 14.1 Unit Tests
+
+```
+^test vault test_addition[] {|
+    >> result :: #i32
+    add![ 2, 3 ] ->| >>result
+    assert![ ::result ==? 5 ]
+    assert_eq![ ::result, 5 ]
+|}
+```
+
+Run with: `m5r test`
+
+### 14.2 Benchmarks
+
+```
+^bench vault bench_fibonacci[ b :: #ref[Bencher] ] {|
+    b::>iter![ {| fib![ 30 ] |} ]
+|}
+```
+
+Run with: `m5r bench`
+
+### 14.3 Integration Tests
+
+Files in `tests/` directory are compiled as separate modules with access to the project’s public API. Each `^test` vault is an integration test.
+
+### 14.4 Property-Based Tests
+
+```
+^proptest vault prop_reverse_twice[ xs :: #arr[#i32] ] {|
+    >> reversed_twice :: #arr[#i32]
+    @arr::reverse![ @arr::reverse![ ::xs ] ] ->| >>reversed_twice
+    assert_eq![ ::xs, ::reversed_twice ]
+|}
+```
+
+-----
+
+## PART 15 — DOCUMENTATION SYSTEM
+
+### 15.1 Doc Comments
+
+```
+~~! This vault computes the factorial of n.
+~~!
+~~! # Arguments
+~~! - `n`: A non-negative integer
+~~!
+~~! # Faults
+~~! Raises `E:overflow` if result exceeds #i64 max.
+~~!
+~~! # Examples
+~~! ```m5r
+~~! >> result :: #i64
+~~! factorial![ 10 ] ->| >>result
+~~! assert_eq![ ::result, 3628800 ]
+~~! ```
+vault factorial[ n :: #i64 ] -> #res[#i64, #str] {|
+    ~~ ...
+|}
+```
+
+### 15.2 Documentation Generation
+
+`m5r doc` produces:
+
+- HTML documentation site (self-contained, no server required)
+- JSON documentation database (for IDE integration)
+- Markdown output (for GitHub wikis)
+- Man pages (for CLI tools)
+
+Doc tests: code blocks inside `~~!` comments are extracted and compiled as tests.
+
+-----
+
+## PART 16 — ABI SPECIFICATION
+
+### 16.1 Name Mangling
+
+m5rcode uses a deterministic name mangling scheme:
+
+```
+_M5R_<module_hash>_<vault_name>_<signature_hash>
+```
+
+Example: `add` in module `math::ops` → `_M5R_a1b2c3_add_d4e5f6`
+
+`^export "C"` vaults are NOT mangled (use exact name as specified).
+
+### 16.2 Calling Convention
+
+m5rcode vaults use the platform-native calling convention:
+
+- x86_64 Windows: Microsoft x64
+- x86_64 Linux/macOS: System V AMD64 ABI
+- ARM64: AAPCS64
+
+Registers are caller-saved and callee-saved per platform spec. The m5rcode compiler generates correct prologue/epilogue.
+
+### 16.3 Struct Layout
+
+Default layout: fields sorted by decreasing alignment (to minimize padding), then by declaration order for ties. Override with `frame^repr[C]::`.
+
+### 16.4 Symbol Visibility
+
+- All public exported vaults: `ELF_STV_DEFAULT` / `__declspec(dllexport)` when building shared lib
+- All internal vaults: `ELF_STV_HIDDEN` / no export
+- `^export "C"` vaults: always exported
+
+-----
+
+## PART 17 — SECURITY FEATURES
+
+1. **Stack canaries**: Enabled by default in debug builds, opt-in in release
+1. **ASLR-compatible**: All PIE/PIC code is ASLR-friendly by default
+1. **Control Flow Integrity (CFI)**: Indirect call validation via LLVM CFI pass
+1. **Shadow stack**: Return address protection via Intel CET / ARM BTI
+1. **Fortify source**: Bounds-checked variants of memcpy/strcpy when available
+1. **Seccomp filter generation**: `@linux::seccomp` module for syscall whitelisting
+1. **Sandboxed comptime**: Comptime evaluation runs in a restricted environment
+
+-----
+
+## PART 18 — IMPLEMENTATION CHECKLIST
+
+Complete ALL of the following. NO stubs. NO TODOs. NO placeholder implementations:
+
+**Compiler Frontend:**
+
+- [ ] Hand-written lexer (C, zero dependencies)
+- [ ] Hand-written recursive descent parser (C)
+- [ ] AST node types for every language construct
+- [ ] Macro expander (declarative + procedural)
+- [ ] Type inferencer (bidirectional, Hindley-Milner + subtyping)
+- [ ] Borrow checker (lifetime regions, conflict detection)
+- [ ] Ownership checker (move semantics, use-after-move)
+- [ ] Effect checker (effect annotations validated)
+- [ ] Thread safety checker ($Send/$Sync verification)
+
+**Compiler Middle:**
+
+- [ ] HIR lowering (AST → SSA HIR)
+- [ ] Monomorphization (generics instantiation)
+- [ ] MIR lowering (HIR → CFG MIR)
+- [ ] Drop elaboration (MIR pass)
+- [ ] All 12 custom optimization passes (Part 12.2)
+- [ ] Profile-guided optimization support
+
+**Compiler Backend:**
+
+- [ ] LLVM IR emitter (full coverage of all language constructs)
+- [ ] Debug info emitter (DWARF 5 / PDB)
+- [ ] TBAA metadata
+- [ ] PGO instrumentation
+- [ ] Incremental compilation with fingerprinting
+
+**Runtime:**
+
+- [ ] Slab heap allocator (C)
+- [ ] Concurrent tri-color incremental GC
+- [ ] Async runtime (io_uring / IOCP / kqueue)
+- [ ] M:N thread scheduler
+- [ ] Stack unwinding for fault propagation
+- [ ] Symbolicated stack traces on fault
+- [ ] UBSan-equivalent runtime checks (debug builds)
+
+**Virtual Machine:**
+
+- [ ] Register-based VM (256 registers)
+- [ ] Full 256-opcode instruction set
+- [ ] Tiered JIT (baseline + optimizing)
+- [ ] `.m5rc` bytecode format
+
+**FFI:**
+
+- [ ] `^ffi "C"` extern vault declaration
+- [ ] All calling convention modes
+- [ ] Dynamic library loading (`@ffi::DynLib`)
+- [ ] Inline assembly (`^asm`)
+- [ ] C header generation (`--emit c-header`)
+- [ ] `^export "C"` symbol export
+
+**Standard Library (ALL modules from Part 8):**
+
+- [ ] @io — Full buffered I/O, async-capable
+- [ ] @fs — Full file system, async-capable
+- [ ] @net — TCP/UDP/TLS/HTTP/WS, async-native
+- [ ] @str — Unicode, regex, formatting
+- [ ] @math — Full math, SIMD, bigint, decimal
+- [ ] @collections — All 9 data structures
+- [ ] @sync — All synchronization primitives
+- [ ] @thread — OS threads, thread pools
+- [ ] @async — Event loop, task spawning
+- [ ] @ffi — Dynamic loading, C strings
+- [ ] @sys — Process, signals, environment
+- [ ] @time — Clocks, date/time, timezones
+- [ ] @json — Serialize/deserialize with derive macro
+- [ ] @log — Structured logging
+- [ ] @test — Unit, bench, property tests
+- [ ] @mem — Manual memory, custom allocators
+- [ ] @gc — Optional GC-managed allocations
+- [ ] @meta — Metaprogramming, proc macros
+- [ ] @crypto — Hashing, encryption, signing
+- [ ] @fmt — Formatting engine
+
+**Platform Modules:**
+
+- [ ] @win32 — Win32 API bindings (Windows)
+- [ ] @posix — POSIX bindings (Linux/macOS)
+- [ ] @linux — Linux-specific (io_uring, seccomp, eBPF)
+- [ ] @macos — macOS-specific (ObjC, Cocoa, Metal)
+
+**Tooling:**
+
+- [ ] `m5rc` — Compiler binary
+- [ ] `m5rv` — VM binary
+- [ ] `m5r` — Runner + build tool
+- [ ] `m5rsh` — REPL (with expression history, type display)
+- [ ] `m5rpkg` — Package manager (full PubGrub resolver)
+- [ ] `m5rfmt` — Code formatter
+- [ ] `m5rlint` — Linter
+- [ ] `m5rprof` — Profiler
+- [ ] `m5rsan` — Sanitizer harness
+- [ ] `m5r lsp` — Full LSP server
+- [ ] TextMate grammar
+- [ ] Tree-sitter grammar
+- [ ] VS Code extension (with LSP)
+- [ ] GDB/LLDB pretty-printers
+- [ ] `m5r doc` — Documentation generator
+
+**Quality:**
+
+- [ ] All error codes (L001–L006, P001–P008, E001–E020, R001–R010)
+- [ ] Error display format exactly as specified in Part 13.1
+- [ ] `m5r test` passes a test suite of minimum 500 test cases
+- [ ] Bootstrapping test: stdlib must compile with m5rcode itself
+- [ ] Hello World binary size < 100KB on Linux (stripped, static)
+- [ ] Fibonacci(40) must complete in < 1 second (native build, -O2)
+
+-----
+
+## PART 19 — DIRECTORY STRUCTURE
+
+```
+m5rcode/
+├── m5r.toml                    Project manifest (bootstrapping)
+├── Makefile                    Top-level build orchestration
+├── CMakeLists.txt              CMake build for compiler (requires LLVM 17+)
+├── README.md                   Project overview
+├── LANGUAGE.md                 Full language reference
+├── SPEC.md                     Formal language specification
+├── CHANGELOG.md
+├── LICENSE
+│
+├── compiler/                   m5rc — The compiler (C + LLVM)
+│   ├── src/
+│   │   ├── main.c
+│   │   ├── lexer.c / .h
+│   │   ├── token.h
+│   │   ├── parser.c / .h
+│   │   ├── ast.c / .h
+│   │   ├── ast_print.c         AST pretty-printer
+│   │   ├── macro.c / .h        Macro expander
+│   │   ├── resolve.c / .h      Name resolution
+│   │   ├── infer.c / .h        Type inference
+│   │   ├── borrow.c / .h       Borrow checker
+│   │   ├── effects.c / .h      Effect checker
+│   │   ├── hir.c / .h          HIR definition + lowering
+│   │   ├── mono.c / .h         Monomorphization
+│   │   ├── mir.c / .h          MIR definition + lowering
+│   │   ├── drop.c / .h         Drop elaboration
+│   │   ├── opt/
+│   │   │   ├── escape.c        Escape analysis
+│   │   │   ├── inline.c        Inliner
+│   │   │   ├── constfold.c     Constant folding
+│   │   │   ├── dce.c           Dead code elimination
+│   │   │   ├── cse.c           Common subexpression elimination
+│   │   │   ├── licm.c          Loop-invariant code motion
+│   │   │   ├── strength.c      Strength reduction
+│   │   │   ├── tailcall.c      Tail call elimination
+│   │   │   ├── alias.c         Alias analysis
+│   │   │   ├── devirt.c        Devirtualization
+│   │   │   ├── sroa.c          Scalar replacement of aggregates
+│   │   │   └── pgo.c           Profile-guided optimization
+│   │   ├── llvm/
+│   │   │   ├── emit.c / .h     LLVM IR emitter
+│   │   │   ├── debug.c / .h    DWARF/PDB debug info
+│   │   │   ├── abi.c / .h      ABI + calling convention
+│   │   │   └── link.c / .h     Linker invocation
+│   │   ├── incremental.c / .h  Incremental compilation
+│   │   ├── error.c / .h        Error reporting + formatting
+│   │   └── util.c / .h         Arena allocator, string interning, etc.
+│   └── tests/
+│       ├── test_lexer.c
+│       ├── test_parser.c
+│       ├── test_infer.c
+│       ├── test_borrow.c
+│       └── test_codegen.c
+│
+├── vm/                         m5rv — Register-based VM (C)
+│   ├── src/
+│   │   ├── main.c
+│   │   ├── vm.c / .h           Main execution loop
+│   │   ├── opcode.h            Opcode definitions
+│   │   ├── heap.c / .h         Slab allocator
+│   │   ├── gc.c / .h           Concurrent tri-color GC
+│   │   ├── jit/
+│   │   │   ├── baseline.c      Baseline JIT compiler
+│   │   │   └── opt.c           Optimizing JIT tier
+│   │   ├── bytecode.c / .h     .m5rc reader/writer
+│   │   └── ffi.c / .h          Native FFI bridge
+│   └── tests/
+│
+├── runtime/                    m5rcode runtime (C + m5rcode)
+│   ├── src/
+│   │   ├── runtime.c / .h      Runtime init/teardown
+│   │   ├── panic.c / .h        Fault handling + stack traces
+│   │   ├── unwind.c / .h       Stack unwinding
+│   │   ├── alloc.c / .h        Global slab allocator
+│   │   ├── gc_conc.c / .h      Concurrent GC (shared with VM)
+│   │   ├── async/
+│   │   │   ├── event_loop.c    Async runtime core
+│   │   │   ├── io_uring.c      Linux backend
+│   │   │   ├── iocp.c          Windows backend
+│   │   │   └── kqueue.c        macOS backend
+│   │   └── thread/
+│   │       ├── scheduler.c     M:N scheduler
+│   │       └── pool.c          Thread pool
+│
+├── stdlib/                     Standard library (.m5r source)
+│   ├── io.m5r
+│   ├── fs.m5r
+│   ├── net.m5r
+│   ├── str.m5r
+│   ├── math.m5r
+│   ├── collections/
+│   │   ├── hashmap.m5r
+│   │   ├── btreemap.m5r
+│   │   ├── vecdeque.m5r
+│   │   └── ...
+│   ├── sync.m5r
+│   ├── thread.m5r
+│   ├── async.m5r
+│   ├── ffi.m5r
+│   ├── sys.m5r
+│   ├── time.m5r
+│   ├── json.m5r
+│   ├── log.m5r
+│   ├── test.m5r
+│   ├── mem.m5r
+│   ├── gc.m5r
+│   ├── meta.m5r
+│   ├── crypto.m5r
+│   ├── fmt.m5r
+│   ├── platform/
+│   │   ├── win32.m5r
+│   │   ├── posix.m5r
+│   │   ├── linux.m5r
+│   │   └── macos.m5r
+│   └── bootstrap/              Thin C layer for syscalls
+│       ├── io_bootstrap.c
+│       ├── fs_bootstrap.c
+│       ├── net_bootstrap.c
+│       └── sys_bootstrap.c
+│
+├── tools/
+│   ├── runner/                 m5r runner + build tool
+│   ├── repl/                   m5rsh REPL
+│   ├── pkg/                    m5rpkg package manager
+│   ├── fmt/                    m5rfmt formatter
+│   ├── lint/                   m5rlint linter
+│   ├── prof/                   m5rprof profiler
+│   ├── lsp/                    LSP server
+│   ├── doc/                    Documentation generator
+│   └── debugger/
+│       ├── gdb_pretty.py       GDB pretty-printers
+│       └── lldb_pretty.py      LLDB formatters
+│
+├── editors/
+│   ├── vscode/                 VS Code extension
+│   ├── tree-sitter/            Tree-sitter grammar
+│   ├── textmate/               TextMate grammar
+│   ├── vim/                    Vim/Neovim plugin
+│   └── emacs/                  Emacs mode
+│
+├── examples/
+│   ├── hello.m5r
+│   ├── fibonacci.m5r
+│   ├── webserver.m5r
+│   ├── msgbox_win32.m5r        Win32 MessageBox example
+│   ├── tcp_echo_server.m5r
+│   ├── json_api_client.m5r
+│   ├── raytracer.m5r
+│   ├── calculator_cli.m5r
+│   ├── todo_app.m5r
+│   ├── concurrent_download.m5r
+│   └── ffi_sqlite.m5r
+│
+└── tests/
+    ├── language/               Per-feature language tests
+    ├── stdlib/                 Stdlib tests
+    ├── codegen/                Code generation tests
+    ├── ffi/                    FFI correctness tests
+    └── stress/                 Stress / fuzz tests
+```
+
+-----
+
+## FINAL DIRECTIVE
+
+This is a complete, production-grade, native-code-compiled programming language. It uses LLVM as its backend. It has a real type system with generics, a borrow checker, an effect system, and thread safety verification. It has a full async runtime. It produces real ELF, PE, and Mach-O binaries. Its FFI is first-class and fully specified. Its toolchain includes a formatter, linter, profiler, debugger integration, LSP server, and package manager with dependency resolution. Its standard library covers I/O, networking, cryptography, collections, concurrency, and metaprogramming.
+
+There is no bytecode interpreter as the primary execution path. There is no transpilation to another language. There are no toy shortcuts. Every listed component must be implemented, every listed file must exist, every listed feature must work.
+
+A developer must be able to write, compile, and run:
+
+1. A Win32 GUI application (using `@win32`)
+1. A Linux TCP server handling 10,000 concurrent connections (using `@net` + `@async`)
+1. A cryptographic hashing utility (using `@crypto`)
+1. A JSON REST API client (using `@net` + `@json`)
+1. A raytracer with SIMD-accelerated math (using `#vec` types + `@math`)
+1. A foreign function that is called from C (using `^export "C"`)
+
+All in `.m5r` files. All compiled to native binaries. All without any runtime dependency except the m5rcode runtime static library.

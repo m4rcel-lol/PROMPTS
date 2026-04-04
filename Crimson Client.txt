@@ -1,0 +1,219 @@
+You are an expert Java/Kotlin developer specializing in Minecraft client development. Your task is to build a fully custom, feature-rich Minecraft client launcher and mod framework from scratch — similar to Lunar Client but remade with additional unique features. The client must support Windows and Linux.
+
+PROJECT OVERVIEW
+Build a custom Minecraft client platform called [CLIENT_NAME] consisting of:
+	1.	A native cross-platform Launcher (Windows + Linux)
+	2.	A Core Mod/Agent that injects into Minecraft at runtime
+	3.	A HUD & UI Framework rendered on top of Minecraft
+	4.	A Settings & Profile System
+	5.	An optional Backend API for cosmetics, stats, and authentication
+
+TECH STACK
+Launcher
+	∙	Language: Java 17+ with JavaFX OR Electron + React + TypeScript (prefer Electron for modern UI)
+	∙	Packaging: Use electron-builder for Windows (.exe installer) and Linux (.AppImage / .deb)
+	∙	Auto-updater: Integrate electron-updater
+Core Client Mod / Agent
+	∙	Language: Java 17 (compiled to a fat JAR)
+	∙	Injection method: Java Agent (-javaagent:) + Mixin framework (Fabric Mixin or SpongePowered Mixin)
+	∙	Build tool: Gradle with shadow JAR plugin
+	∙	Target Minecraft versions: 1.8.9 (for PvP), 1.12.2, 1.16.5, 1.18.2, 1.19.4, 1.20.x
+	∙	Base: Build on top of Fabric Loader or use Forge as the mod loader backbone
+Rendering / HUD
+	∙	Use LWJGL (already bundled in Minecraft) for OpenGL rendering
+	∙	Custom GUI framework built with scissor regions, layered rendering, and animation easing
+	∙	Font rendering via Minecraft’s font renderer extended with custom TTF support
+Settings Backend (optional but recommended)
+	∙	Node.js + Express or FastAPI (Python)
+	∙	Database: PostgreSQL for user data, Redis for sessions/caching
+	∙	Auth: JWT tokens + optional Microsoft OAuth passthrough
+
+LAUNCHER REQUIREMENTS
+UI/UX
+	∙	Modern dark-themed UI with accent color customization (like Lunar’s purple, but user-changeable)
+	∙	Animated splash screen with client logo
+	∙	Tabbed navigation: Home | Settings | Mods | Cosmetics | Support
+	∙	News/changelog feed pulled from your own API or a static JSON file
+Core Features
+	∙	Microsoft Account Login via OAuth2 device flow (official Minecraft auth)
+	∙	Offline mode support with custom username
+	∙	Version selector: choose any supported Minecraft version
+	∙	RAM allocation slider (in MB, with recommended value shown)
+	∙	JVM arguments editor (with presets: Garbage Collection optimizations, etc.)
+	∙	Java path auto-detection + manual override
+	∙	Game resolution preset selector (windowed, fullscreen, custom WxH)
+	∙	Server quick-connect: enter an IP and launch directly into a server
+	∙	Mod toggle list: enable/disable individual client modules before launch
+	∙	Auto-download and cache Minecraft assets, libraries, and version JSONs from Mojang’s API
+	∙	Delta patching for client updates (only download changed files)
+	∙	Crash reporter: capture logs and offer one-click upload/share
+Performance
+	∙	Parallel asset downloading with progress bar
+	∙	SHA1 integrity checks on all downloaded files
+	∙	Local cache management with cleanup tool
+
+CORE CLIENT MOD — MODULES
+Each module must be independently toggleable with a keybind and configurable via an in-game GUI. Implement the following categories:
+⚔️ PvP Modules
+	∙	FPS Boost: Disable unnecessary particles, reduce render distance cap, cull non-visible entities
+	∙	Hit Color: Customize the color flash when you or an entity takes damage
+	∙	Armor Status HUD: Show current armor durability with color warnings
+	∙	Keystrokes HUD: Display WASD + LMB/RMB click visualizer with CPS counter
+	∙	CPS Counter: Clicks per second with configurable display
+	∙	Reach Display: Show exact block reach distance in real-time
+	∙	Direction HUD: Compass-style direction indicator
+	∙	Combo Counter: Track and display hit combos in PvP
+	∙	Ping Display: Your current latency to the server in ms
+	∙	Potion Effects HUD: Clean custom display of active potion effects (replaces vanilla)
+	∙	Target HUD: Show health, armor, and name of your current target in a stylized panel
+	∙	Bow Charge Indicator: Visual charge meter when drawing a bow
+	∙	Item Counter: Track arrows, golden apples, pearls, etc. on HUD
+	∙	Cooldown Display (1.9+): Visual cooldown indicators for weapons/items
+	∙	Block Counter: Show blocks remaining in hand
+🎨 Visual / Aesthetic Modules
+	∙	Custom Crosshair: Pick from preset shapes or import a custom PNG crosshair
+	∙	Freelook: Hold a key to look around without moving the camera direction
+	∙	Zoom: Optifine-style zoom with scroll-to-adjust magnification and smooth transition animation
+	∙	Custom Sky: Replace sky color or texture per-dimension
+	∙	Full Bright / Gamma Override: Always render at max brightness
+	∙	Waypoints: 3D floating beacons with label and distance, saveable per-server
+	∙	Name Tags: Customize font size, background opacity, and render distance of player name tags
+	∙	Cape & Cosmetics Renderer: Render client-side cosmetics (capes, wings, hats) for users on your client
+	∙	Entity Outlines: Subtle glow outlines on players/mobs (configurable color per entity type)
+	∙	Clean UI: Hide XP bar, food bar, or other HUD elements individually
+	∙	Animated HUD: Add easing animations when HUD elements appear/disappear
+	∙	Custom Main Menu: Replace Minecraft’s main menu with a custom branded one
+🗺️ Utility Modules
+	∙	Minimap: Chunk-cached overhead minimap with waypoints, player blips, and death markers
+	∙	World Time Display: Show in-world time (day/night) with a clock graphic
+	∙	Coordinates HUD: XYZ + facing direction + biome + light level display
+	∙	FPS & Performance HUD: FPS, RAM usage, GPU usage (via OSHI or JNA)
+	∙	Auto GG: Send “gg” or custom message automatically when a game ends (detect common game-end messages)
+	∙	Server Info HUD: Show current server IP/name, online players, MOTD snippet
+	∙	Session Stats: K/D ratio, kills, deaths tracked per login session
+	∙	Screenshot Manager: Enhanced screenshot tool with in-game gallery viewer
+	∙	Chat Timestamps: Add timestamps to all chat messages
+	∙	Chat Filter: Block or highlight messages matching custom regex patterns
+	∙	Toggle Sprint / Sneak: Toggle keys instead of hold (with visual indicator)
+	∙	Auto Text / Macros: Bind keys to send custom chat messages or commands
+	∙	Quick Commands: Bind common commands (e.g., /hub, /party, /msg) to keybinds
+	∙	Pack Organizer: In-game resource pack switcher without opening the menu
+📊 HUD Framework (General)
+	∙	All HUD elements must be:
+	∙	Draggable via an HUD Editor mode (press a keybind like F6 to enter, drag elements freely)
+	∙	Resizable with scroll wheel
+	∙	Snappable to a grid
+	∙	Saveable per-profile
+	∙	Toggled individually
+	∙	Support multiple HUD profiles (e.g., “PvP”, “Survival”, “Streaming”)
+
+IN-GAME GUI (SETTINGS MENU)
+	∙	Open with a configurable keybind (default: Right Shift)
+	∙	Tabbed sidebar: Modules | HUD | Keybinds | Performance | Account | About
+	∙	Module list with search bar, category filters, and toggle switches
+	∙	Each module opens a sub-panel with its specific settings (sliders, color pickers, toggles, dropdowns, text inputs)
+	∙	Color picker: Full HSV/RGB/Hex color wheel built from scratch using OpenGL
+	∙	Keybind recorder: Click a field and press a key to bind
+	∙	Animations: Smooth sliding panel transitions, eased with cubic-bezier
+	∙	Theme system: Light/Dark mode + accent color picker applied globally
+	∙	Settings persist to a JSON config file per Minecraft version
+
+PERFORMANCE OPTIMIZATIONS (UNIQUE FEATURES)
+These are features Lunar Client lacks or does poorly:
+	∙	Shader Precompiler: On first launch of a version, precompile and cache shaders to reduce stutter
+	∙	Chunk Load Scheduler: Prioritize chunk loading in the direction the player is facing
+	∙	Memory Defragmenter: Trigger a soft GC in the background every configurable interval without causing lag spikes
+	∙	Dynamic FPS Cap: Automatically reduce FPS cap when window is unfocused (configurable target)
+	∙	Network Buffer Tuning: Expose Netty TCP buffer size settings for low-latency tweaking
+	∙	Entity Culling: Skip rendering entities fully occluded behind solid blocks (port/reimplement EntityCulling mod logic)
+
+UNIQUE FEATURES (NOT IN LUNAR CLIENT)
+	∙	Replay Integration: Bundle a lightweight replay recorder (similar to ReplayMod) with a built-in viewer
+	∙	Voice Chat: Built-in proximity voice chat using UDP + Opus codec (no external mod needed)
+	∙	Custom Death Screen: Branded, animated death screen with your killer’s name and stats
+	∙	Anti-Nausea: Remove the nausea/portal swirl effect without replacing textures
+	∙	Pack Preview: Hover over a resource pack in the pack switcher to see a live preview thumbnail
+	∙	Server Profiles: Save server-specific configs (HUD layout, mods enabled) that auto-switch when you join that server
+	∙	Hypixel Suite: Dedicated module group for Hypixel:
+	∙	Bedwars Overlay (team health, bed status)
+	∙	Skyblock helper (item tooltips, auction price lookup via Hypixel API)
+	∙	Auto /limbo on kick
+	∙	Game mode detector to auto-switch HUD profile
+	∙	Streamer Mode: One-click mode that hides IP, coordinates, and chat content for streaming
+	∙	In-Game FPS Graph: Rolling 30-second FPS/MS graph in a HUD panel
+	∙	Plugin Message Inspector (debug/dev tool): View mod channel packet traffic in real-time
+	∙	Accessibility Options: Colorblind modes (Deuteranopia, Protanopia, Tritanopia) applied via post-processing shader
+
+COSMETICS SYSTEM
+	∙	Cape system: Users can upload a custom cape PNG (64x32 or 64x64) tied to their account
+	∙	Hat layer: Render a custom hat model above the player head (JSON model format)
+	∙	Wing cosmetics: Animated elytra-style cosmetics rendered on back
+	∙	All cosmetics are fetched from your API and cached locally
+	∙	Other players on the same client see each other’s cosmetics client-side
+	∙	A cosmetics shop page in the launcher (can be stubbed out initially)
+
+ANTI-CHEAT FRIENDLINESS
+	∙	Do NOT implement any modules that modify movement packets, attack reach, or hit registration
+	∙	All modules are purely visual or QoL — nothing that sends false packets
+	∙	Ensure no hooks into packet sending that could flag server-side anti-cheats (e.g., Watchdog, AAC, Grim)
+	∙	Include a clear Terms of Service in the launcher stating what the client does and does not do
+
+BUILD & PROJECT STRUCTURE
+
+root/
+├── launcher/                  # Electron launcher app
+│   ├── src/
+│   │   ├── main/              # Electron main process
+│   │   ├── renderer/          # React UI
+│   │   └── shared/            # Shared types/utils
+│   ├── assets/
+│   └── package.json
+│
+├── client-core/               # Java agent + Mixin mod
+│   ├── src/main/java/
+│   │   ├── core/              # Agent bootstrap, injection
+│   │   ├── modules/           # All feature modules
+│   │   │   ├── pvp/
+│   │   │   ├── visual/
+│   │   │   └── utility/
+│   │   ├── hud/               # HUD framework & elements
+│   │   ├── gui/               # In-game settings GUI
+│   │   ├── config/            # Config serialization
+│   │   ├── cosmetics/         # Cape/cosmetic rendering
+│   │   └── utils/             # Shared utilities
+│   ├── src/main/resources/
+│   │   └── mixins.json
+│   └── build.gradle
+│
+├── backend/ (optional)        # API server
+│   ├── routes/
+│   ├── models/
+│   └── index.js
+│
+└── README.md
+
+
+DELIVERABLES EXPECTED FROM YOU
+	1.	Full Electron launcher with all described UI screens and functionality
+	2.	Full Java client core with all modules implemented using Mixins
+	3.	HUD editor system fully working
+	4.	In-game settings GUI with all panels
+	5.	Gradle build scripts that produce a working fat JAR
+	6.	Electron build config for Windows (.exe) and Linux (.AppImage)
+	7.	Working Microsoft OAuth login flow in the launcher
+	8.	Config system that reads/writes JSON per version per user profile
+	9.	Basic cosmetics loader that fetches from a placeholder API endpoint
+	10.	A detailed README.md with setup instructions, build steps, and contribution guide
+
+CODING STANDARDS
+	∙	All Java code must use Java 17 features where appropriate (records, sealed classes, pattern matching)
+	∙	Electron/React code must be in TypeScript with strict mode enabled
+	∙	No magic numbers — use named constants
+	∙	All modules must implement a common Module interface/abstract class with: onEnable(), onDisable(), onRender(), onUpdate(), getName(), getCategory(), getDescription()
+	∙	Config values must use a generic Setting wrapper class
+	∙	Every HUD element must extend a base HudElement class with position, scale, and visibility properties
+	∙	Use dependency injection where appropriate — avoid God classes
+	∙	Write Javadoc for all public-facing APIs
+	∙	Follow Google Java Style Guide for Java and Airbnb TypeScript Style Guide for the launcher
+
+Begin by scaffolding the full project structure, then implement each section systematically. Ask clarifying questions only if a requirement is fundamentally ambiguous. Otherwise, make reasonable assumptions and document them inline.​​​​​​​​​​​​​​​​
